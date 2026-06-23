@@ -36,9 +36,18 @@ type RetrievalResponse = {
   stages: RetrievalStage[];
   results: RetrievalResult[];
   packed_context: PackedContext;
+  answer: Answer;
 };
 
 type FeedbackLabel = "correct" | "incomplete" | "wrong";
+
+type Answer = {
+  text: string;
+  model: string;
+  citation_ids: string[];
+  prompt_chars: number;
+  prompt_token_estimate: number;
+};
 
 type ContextBlock = {
   citation_id: string;
@@ -184,11 +193,9 @@ export default function ChatPage() {
             <p className="eyebrow">Hybrid search</p>
             <h2>Ask from indexed chunks</h2>
             <p>
-              This step stops before answer generation. It shows dense retrieval,
-              sparse retrieval, rank fusion, reranking, and the evidence selected
-              for the future answer step. Mark which chunks are actually useful so
-              we can build evaluation data before changing models. The packed
-              context panel shows exactly what the generator will receive next.
+              This step generates a grounded answer from the packed context. The
+              trace keeps retrieval, reranking, context packing, generation, and
+              evidence visible for inspection.
             </p>
           </div>
 
@@ -207,6 +214,29 @@ export default function ChatPage() {
 
           {error ? <p className="form-error">{error}</p> : null}
         </section>
+
+        {response ? (
+          <section className="answer-card">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Answer</p>
+                <h2>Generated from packed evidence</h2>
+              </div>
+              <small>{response.answer.model}</small>
+            </div>
+            <p>{response.answer.text}</p>
+            <div className="score-row">
+              <span>
+                citations{" "}
+                {response.answer.citation_ids.length
+                  ? response.answer.citation_ids.map((id) => `[${id}]`).join(", ")
+                  : "—"}
+              </span>
+              <span>{response.answer.prompt_token_estimate} prompt tokens est.</span>
+              <span>{response.answer.prompt_chars} prompt chars</span>
+            </div>
+          </section>
+        ) : null}
 
         <section className="trace-results-grid">
           <div className="retrieval-trace-card">
@@ -249,7 +279,8 @@ export default function ChatPage() {
             ) : (
               <p className="document-empty">
                 Run a query to see dense retrieval, sparse retrieval, rank fusion,
-                reranking, context packing, and evidence preview stages.
+                reranking, context packing, answer generation, and evidence preview
+                stages.
               </p>
             )}
           </div>

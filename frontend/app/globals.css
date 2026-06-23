@@ -464,6 +464,40 @@ textarea {
   padding: 22px;
 }
 
+.answer-card {
+  background: #102e24;
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  color: white;
+  padding: 22px;
+}
+
+.answer-card .section-heading {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+.answer-card .eyebrow,
+.answer-card .section-heading small {
+  color: #75d8b3;
+}
+
+.answer-card h2 {
+  color: white;
+}
+
+.answer-card > p {
+  color: #e5f2ed;
+  line-height: 1.65;
+  margin: 0 0 14px;
+  white-space: pre-wrap;
+}
+
+.answer-card .score-row span {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #d7eee5;
+}
+
 .section-heading {
   align-items: flex-start;
   border-bottom: 1px solid #edf0ee;

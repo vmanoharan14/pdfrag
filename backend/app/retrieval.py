@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.context_packing import PackedContext, pack_context
 from app.database import get_session
+from app.generation import GenerationResult, generate_answer
 from app.indexing import collection_name_for, embed_texts_adaptive
 from app.models import Document, DocumentChunk, DocumentVersion, EvidenceFeedback
 from app.reranking import RerankItem, score_pairs
@@ -82,12 +83,21 @@ class PackedContextResponse(BaseModel):
     truncated: bool
 
 
+class AnswerResponse(BaseModel):
+    text: str
+    model: str
+    citation_ids: list[str]
+    prompt_chars: int
+    prompt_token_estimate: int
+
+
 class RetrievalResponse(BaseModel):
     query: str
     mode: str
     stages: list[RetrievalStage]
     results: list[RetrievalResult]
     packed_context: PackedContextResponse
+    answer: AnswerResponse
 
 
 class EvidenceFeedbackRequest(BaseModel):
@@ -405,6 +415,16 @@ def packed_context_response(context: PackedContext) -> PackedContextResponse:
     )
 
 
+def answer_response(answer: GenerationResult) -> AnswerResponse:
+    return AnswerResponse(
+        text=answer.answer,
+        model=answer.model,
+        citation_ids=answer.citation_ids,
+        prompt_chars=answer.prompt_chars,
+        prompt_token_estimate=answer.prompt_token_estimate,
+    )
+
+
 async def rerank_candidates(
     query: str,
     candidates: list[FusedCandidate],
@@ -571,9 +591,50 @@ async def search_documents(
     stages.append(
         RetrievalStage(
             sequence=7,
+            stage="answer generation",
+            status="completed",
+            message="Generated a grounded answer from packed evidence with Qwen.",
+            duration_ms=0,
+            details={},
+        )
+    )
+    started_at = time.perf_counter()
+    generation_status = "completed"
+    generation_message = "Generated a grounded answer from packed evidence with Qwen."
+    try:
+        generated_answer = await generate_answer(query, packed_context, settings)
+        generation_details = {
+            "model": generated_answer.model,
+            "prompt_chars": generated_answer.prompt_chars,
+            "prompt_token_estimate": generated_answer.prompt_token_estimate,
+            "citation_ids": generated_answer.citation_ids,
+        }
+    except httpx.HTTPError as exc:
+        generation_status = "failed"
+        generation_message = "Generation failed; returned a safe fallback answer."
+        generated_answer = GenerationResult(
+            answer="Not enough evidence.",
+            model=settings.generation_model,
+            prompt="",
+            citation_ids=[],
+            prompt_chars=0,
+            prompt_token_estimate=0,
+        )
+        generation_details = {
+            "model": settings.generation_model,
+            "error": str(exc),
+        }
+    stages[-1].status = generation_status
+    stages[-1].message = generation_message
+    stages[-1].duration_ms = elapsed_ms(started_at)
+    stages[-1].details = generation_details
+
+    stages.append(
+        RetrievalStage(
+            sequence=8,
             stage="evidence preview",
             status="completed",
-            message="Returned top evidence chunks. Generation is intentionally not active yet.",
+            message="Returned answer, top evidence chunks, and packed context.",
             duration_ms=0,
             details={"returned": len(ranked), "limit": FUSED_LIMIT},
         )
@@ -585,10 +646,11 @@ async def search_documents(
 
     return RetrievalResponse(
         query=query,
-        mode="retrieval_rerank_context_only",
+        mode="generated_answer",
         stages=stages,
         results=results,
         packed_context=packed_context_response(packed_context),
+        answer=answer_response(generated_answer),
     )
 
 
