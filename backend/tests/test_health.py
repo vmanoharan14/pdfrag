@@ -26,4 +26,3 @@ async def test_timed_check_reports_dependency_error() -> None:
 
     assert result["status"] == "unhealthy"
     assert result["error"] == "dependency failed"
-

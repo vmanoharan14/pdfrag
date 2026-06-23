@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.documents import router as documents_router
 from app.health import dependency_health
 
 
@@ -18,6 +20,13 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:13000"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+app.include_router(documents_router)
 
 
 @app.get("/api/health/live")
@@ -32,4 +41,3 @@ async def live() -> dict[str, str]:
 @app.get("/api/health/ready")
 async def ready() -> dict:
     return await dependency_health(settings)
-

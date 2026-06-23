@@ -76,3 +76,12 @@ Open:
 - Overview: `http://127.0.0.1:13000`
 - Chat preview: `http://127.0.0.1:13000/chat`
 - Trace preview: `http://127.0.0.1:13000/traces/demo`
+- Documents: `http://127.0.0.1:13000/documents`
+
+## Database migrations
+
+Apply backend schema migrations after infrastructure and backend setup:
+
+```bash
+./scripts/migrate_database.sh
+```

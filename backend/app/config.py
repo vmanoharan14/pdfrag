@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     minio_api_port: int = 9000
     minio_host: str = "127.0.0.1"
+    minio_root_user: str
+    minio_root_password: str
+    minio_bucket: str = "documents"
 
     ollama_base_url: str = "http://127.0.0.1:11434"
     required_ollama_models: list[str] = Field(
@@ -51,9 +54,7 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        return (
-            f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/0"
-        )
+        return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/0"
 
     @property
     def qdrant_url(self) -> str:
@@ -67,4 +68,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
-

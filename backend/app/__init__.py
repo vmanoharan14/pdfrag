@@ -1,2 +1,1 @@
 """PDFRAG backend application."""
-

@@ -111,19 +111,6 @@ input {
   color: white;
 }
 
-.disabled-link {
-  color: #78958b;
-}
-
-.disabled-link small {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
-  font-size: 9px;
-  margin-left: auto;
-  padding: 3px 6px;
-  text-transform: uppercase;
-}
-
 .nav-icon {
   color: #87c9b1;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -615,6 +602,210 @@ input {
   text-align: center;
 }
 
+.documents-page {
+  max-width: 1160px;
+}
+
+.upload-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 28px 42px;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  padding: 30px;
+}
+
+.upload-card h2 {
+  font-size: 26px;
+  letter-spacing: -0.04em;
+  margin: 0 0 10px;
+}
+
+.upload-card > div > p:not(.eyebrow) {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+  max-width: 560px;
+}
+
+.upload-card form {
+  display: grid;
+  gap: 10px;
+}
+
+.file-picker {
+  background: #f7faf8;
+  border: 1px dashed #b9c9c0;
+  border-radius: 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 92px;
+  padding: 18px;
+}
+
+.file-picker:hover {
+  border-color: var(--brand);
+}
+
+.file-picker span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.file-picker small {
+  color: #829088;
+  margin-top: 6px;
+}
+
+.file-picker input {
+  display: none;
+}
+
+.upload-button {
+  background: var(--brand);
+  border: 0;
+  border-radius: 10px;
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 44px;
+}
+
+.upload-button:hover:not(:disabled) {
+  background: var(--brand-dark);
+}
+
+.upload-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.form-message {
+  border-radius: 9px;
+  font-size: 12px;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.success-message {
+  background: #e8f7ef;
+  color: #087246;
+}
+
+.error-message {
+  background: #fff0ef;
+  color: #9c2e27;
+}
+
+.document-list-section {
+  margin-top: 36px;
+}
+
+.document-table {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+.document-row {
+  align-items: center;
+  border-bottom: 1px solid #edf0ee;
+  display: grid;
+  font-size: 12px;
+  gap: 18px;
+  grid-template-columns: minmax(280px, 1fr) 100px 170px 90px;
+  min-height: 76px;
+  padding: 12px 18px;
+}
+
+.document-row:last-child {
+  border-bottom: 0;
+}
+
+.document-header {
+  background: #f7f9f8;
+  color: #839088;
+  font-size: 10px;
+  font-weight: 700;
+  min-height: 42px;
+  text-transform: uppercase;
+}
+
+.document-name {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.document-name > div {
+  min-width: 0;
+}
+
+.document-name strong,
+.document-name small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-name small {
+  color: #87928c;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  margin-top: 5px;
+}
+
+.file-icon {
+  align-items: center;
+  background: #e7f4ee;
+  border-radius: 9px;
+  color: #08704a;
+  display: flex;
+  flex: none;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 9px;
+  font-weight: 800;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.queue-state {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  text-transform: capitalize;
+}
+
+.queue-state i {
+  background: #e7a92f;
+  border-radius: 50%;
+  height: 7px;
+  width: 7px;
+}
+
+.document-row code {
+  color: #68756e;
+  font-size: 10px;
+}
+
+.document-empty {
+  color: #849088;
+  font-size: 13px;
+  margin: 0;
+  padding: 32px 18px;
+  text-align: center;
+}
+
 @media (max-width: 980px) {
   .service-grid {
     grid-template-columns: repeat(2, 1fr);
@@ -622,6 +813,18 @@ input {
 
   .trace-summary {
     grid-template-columns: 1fr;
+  }
+
+  .upload-card {
+    grid-template-columns: 1fr;
+  }
+
+  .document-row {
+    grid-template-columns: minmax(230px, 1fr) 90px 150px;
+  }
+
+  .document-row > :last-child {
+    display: none;
   }
 
   .trace-metrics {
@@ -658,6 +861,14 @@ input {
 
   .service-grid {
     grid-template-columns: 1fr;
+  }
+
+  .document-table {
+    overflow-x: auto;
+  }
+
+  .document-row {
+    min-width: 690px;
   }
 
   .section-heading {

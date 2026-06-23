@@ -7,6 +7,7 @@ const links = [
   { href: "/", icon: "⌁", label: "Overview" },
   { href: "/chat", icon: "◫", label: "Chat" },
   { href: "/traces/demo", icon: "⌘", label: "Traces" },
+  { href: "/documents", icon: "▤", label: "Documents" },
 ];
 
 export function SidebarNav() {
@@ -27,11 +28,6 @@ export function SidebarNav() {
           </Link>
         );
       })}
-      <span className="disabled-link">
-        <span className="nav-icon">▤</span>
-        Documents
-        <small>soon</small>
-      </span>
     </nav>
   );
 }

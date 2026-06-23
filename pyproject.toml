@@ -4,11 +4,15 @@ version = "0.1.0"
 description = "Inspectable enterprise document RAG"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+  "alembic>=1.15,<2",
+  "boto3>=1.37,<2",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "psycopg[binary]>=3.2,<4",
   "pydantic-settings>=2.7,<3",
+  "python-multipart>=0.0.20,<1",
   "redis>=5.2,<7",
+  "sqlalchemy>=2.0,<3",
   "uvicorn[standard]>=0.34,<1",
 ]
 

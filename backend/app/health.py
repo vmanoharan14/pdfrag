@@ -95,11 +95,7 @@ def build_dependency_checks(settings: Settings) -> list[DependencyCheck]:
             payload = response.json()
 
         installed = {model["name"] for model in payload.get("models", [])}
-        missing = [
-            model
-            for model in settings.required_ollama_models
-            if model not in installed
-        ]
+        missing = [model for model in settings.required_ollama_models if model not in installed]
         if missing:
             raise RuntimeError(f"required models not installed: {', '.join(missing)}")
         return {"models": sorted(settings.required_ollama_models)}
@@ -116,16 +112,8 @@ def build_dependency_checks(settings: Settings) -> list[DependencyCheck]:
 async def dependency_health(settings: Settings) -> dict[str, Any]:
     checks = build_dependency_checks(settings)
     results = await asyncio.gather(
-        *[
-            _timed_check(check, settings.dependency_timeout_seconds)
-            for check in checks
-        ]
+        *[_timed_check(check, settings.dependency_timeout_seconds) for check in checks]
     )
     dependencies = dict(zip((check.name for check in checks), results, strict=True))
-    status = (
-        "healthy"
-        if all(result["status"] == "healthy" for result in results)
-        else "degraded"
-    )
+    status = "healthy" if all(result["status"] == "healthy" for result in results) else "degraded"
     return {"status": status, "dependencies": dependencies}
-
