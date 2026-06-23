@@ -17,4 +17,5 @@ exec .runtime/venv/bin/uvicorn \
   --app-dir backend \
   --host 127.0.0.1 \
   --port "${BACKEND_PORT:-18000}" \
+  --reload-dir backend \
   --reload

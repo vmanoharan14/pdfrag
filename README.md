@@ -85,3 +85,12 @@ Apply backend schema migrations after infrastructure and backend setup:
 ```bash
 ./scripts/migrate_database.sh
 ```
+
+Start the ingestion worker in a separate terminal:
+
+```bash
+./scripts/start_worker.sh
+```
+
+The local worker intentionally uses one process and one thread to bound CPU and
+memory use while Docling parses documents.

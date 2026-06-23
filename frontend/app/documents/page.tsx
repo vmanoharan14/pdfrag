@@ -12,6 +12,18 @@ type DocumentItem = {
   sha256: string;
   status: string;
   current_stage: string;
+  parser_used: string | null;
+  page_count: number | null;
+  steps: TraceStep[];
+};
+
+type TraceStep = {
+  sequence: number;
+  stage: string;
+  status: string;
+  message: string | null;
+  details: Record<string, unknown> | null;
+  duration_ms: number | null;
 };
 
 const backendUrl =
@@ -21,6 +33,29 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function collapseTraceSteps(steps: TraceStep[]): TraceStep[] {
+  const grouped = new Map<string, TraceStep>();
+
+  for (const step of steps) {
+    const existing = grouped.get(step.stage);
+    if (!existing) {
+      grouped.set(step.stage, step);
+      continue;
+    }
+
+    grouped.set(step.stage, {
+      ...existing,
+      ...step,
+      sequence: existing.sequence,
+      message: step.message ?? existing.message,
+      details: step.details ?? existing.details,
+      duration_ms: step.duration_ms ?? existing.duration_ms,
+    });
+  }
+
+  return Array.from(grouped.values());
 }
 
 export default function DocumentsPage() {
@@ -48,28 +83,32 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     let active = true;
-    fetch(`${backendUrl}/api/documents`, { cache: "no-store" })
-      .then((response) => {
+    async function refresh() {
+      try {
+        const response = await fetch(`${backendUrl}/api/documents`, {
+          cache: "no-store",
+        });
         if (!response.ok) throw new Error("Could not load documents.");
-        return response.json();
-      })
-      .then((payload: DocumentItem[]) => {
+        const payload: DocumentItem[] = await response.json();
         if (active) {
           setDocuments(payload);
           setError(null);
+          setLoading(false);
         }
-      })
-      .catch((caught: unknown) => {
+      } catch (caught) {
         if (active) {
           setError(caught instanceof Error ? caught.message : "Request failed.");
+          setLoading(false);
         }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+      }
+    }
+
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 2000);
 
     return () => {
       active = false;
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -110,6 +149,25 @@ export default function DocumentsPage() {
     }
   }
 
+  async function retryJob(jobId: string) {
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await fetch(
+        `${backendUrl}/api/ingestion-jobs/${jobId}/retry`,
+        { method: "POST" },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail ?? "Could not queue ingestion.");
+      }
+      setMessage(`Queued ingestion job ${jobId}.`);
+      await loadDocuments();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Request failed.");
+    }
+  }
+
   return (
     <>
       <header className="topbar">
@@ -117,7 +175,7 @@ export default function DocumentsPage() {
           <p className="eyebrow">Library</p>
           <h1>Documents</h1>
         </div>
-        <span className="status-pill neutral">Upload persistence only</span>
+        <span className="status-pill success">Async parsing enabled</span>
       </header>
 
       <div className="page-content documents-page">
@@ -126,15 +184,18 @@ export default function DocumentsPage() {
             <p className="eyebrow">Add source</p>
             <h2>Upload a document</h2>
             <p>
-              This slice stores the original in MinIO and creates document,
-              version, and ingestion-job records. Parsing starts in the next
-              slice.
+              The original is stored in MinIO, then a single CPU worker parses
+              it asynchronously and records every ingestion stage below.
             </p>
           </div>
 
           <form onSubmit={upload}>
             <label className="file-picker" htmlFor="document-file">
-              <span>{selected ? selected.name : "Choose PDF, Markdown, or text"}</span>
+              <span>
+                {selected
+                  ? selected.name
+                  : "Choose digital PDF, Markdown, or text"}
+              </span>
               <small>{selected ? formatBytes(selected.size) : "Maximum 50 MB"}</small>
               <input
                 accept=".pdf,.md,.markdown,.txt,application/pdf,text/plain,text/markdown"
@@ -175,25 +236,85 @@ export default function DocumentsPage() {
                 No documents yet. Upload a small file to test this slice.
               </p>
             ) : (
-              documents.map((item) => (
-                <article className="document-row" key={item.version_id}>
-                  <div className="document-name">
-                    <span className="file-icon">
-                      {item.media_type === "application/pdf" ? "PDF" : "TXT"}
-                    </span>
-                    <div>
-                      <strong>{item.filename}</strong>
-                      <small>sha256 {item.sha256.slice(0, 12)}…</small>
+              documents.map((item) => {
+                const stageSteps = collapseTraceSteps(item.steps);
+
+                return (
+                  <article className="document-entry" key={item.version_id}>
+                    <div className="document-row">
+                      <div className="document-name">
+                        <span className="file-icon">
+                          {item.media_type === "application/pdf" ? "PDF" : "TXT"}
+                        </span>
+                        <div>
+                          <strong>{item.filename}</strong>
+                          <small>sha256 {item.sha256.slice(0, 12)}…</small>
+                        </div>
+                      </div>
+                      <span>{formatBytes(item.size_bytes)}</span>
+                      <span className={`queue-state ${item.status}`}>
+                        <i />
+                        {item.current_stage.replaceAll("_", " ")}
+                      </span>
+                      <code>{item.job_id.slice(0, 8)}</code>
                     </div>
-                  </div>
-                  <span>{formatBytes(item.size_bytes)}</span>
-                  <span className="queue-state">
-                    <i />
-                    {item.current_stage.replaceAll("_", " ")}
-                  </span>
-                  <code>{item.job_id.slice(0, 8)}</code>
-                </article>
-              ))
+                    {stageSteps.length > 0 ? (
+                      <div className="ingestion-trace">
+                        <div className="ingestion-trace-summary">
+                          <span>
+                            {item.parser_used ?? "Parser pending"}
+                            {item.page_count ? ` · ${item.page_count} page(s)` : ""}
+                          </span>
+                          <div>
+                            <strong>{item.status}</strong>
+                            {item.status === "queued" || item.status === "failed" ? (
+                              <button
+                                className="retry-button"
+                                onClick={() => void retryJob(item.job_id)}
+                                type="button"
+                              >
+                                Process
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <ol>
+                          {stageSteps.map((step, index) => (
+                            <li
+                              className={`ingestion-step ${step.status}`}
+                              key={step.stage}
+                            >
+                              <span className="trace-sequence">
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
+                              <div>
+                                <strong>{step.stage.replaceAll("_", " ")}</strong>
+                                <small>{step.message}</small>
+                              </div>
+                              <time>
+                                {step.duration_ms === null
+                                  ? step.status
+                                  : `${step.duration_ms} ms`}
+                              </time>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : (
+                      <div className="ingestion-trace empty-trace">
+                        <span>No worker events recorded yet.</span>
+                        <button
+                          className="retry-button"
+                          onClick={() => void retryJob(item.job_id)}
+                          type="button"
+                        >
+                          Process
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                );
+              })
             )}
           </div>
         </section>

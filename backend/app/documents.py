@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_session
 from app.models import Document, DocumentVersion, IngestionJob
+from app.parsing import process_document
 from app.storage import ObjectStorage, get_object_storage
 
 router = APIRouter(prefix="/api", tags=["documents"])
@@ -36,6 +37,17 @@ class UploadResponse(BaseModel):
     status: str
 
 
+class TraceStepResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    sequence: int
+    stage: str
+    status: str
+    message: str | None
+    details: dict | None
+    duration_ms: int | None
+
+
 class JobResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,6 +56,7 @@ class JobResponse(BaseModel):
     status: str
     current_stage: str
     failure_reason: str | None
+    steps: list[TraceStepResponse]
 
 
 class DocumentListItem(BaseModel):
@@ -56,6 +69,9 @@ class DocumentListItem(BaseModel):
     sha256: str
     status: str
     current_stage: str
+    parser_used: str | None
+    page_count: int | None
+    steps: list[TraceStepResponse]
 
 
 def safe_filename(filename: str) -> str:
@@ -137,6 +153,8 @@ async def upload_document(
         await storage.delete(object_key)
         raise
 
+    process_document.send(str(job_id))
+
     return UploadResponse(
         document_id=document_id,
         version_id=version_id,
@@ -153,9 +171,38 @@ async def get_ingestion_job(
     job_id: uuid.UUID,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> IngestionJob:
-    job = await session.get(IngestionJob, job_id)
+    statement = (
+        select(IngestionJob)
+        .options(selectinload(IngestionJob.steps))
+        .where(IngestionJob.id == job_id)
+    )
+    job = await session.scalar(statement)
     if job is None:
         raise HTTPException(status_code=404, detail="Ingestion job not found.")
+    return job
+
+
+@router.post("/ingestion-jobs/{job_id}/retry", response_model=JobResponse, status_code=202)
+async def retry_ingestion_job(
+    job_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> IngestionJob:
+    statement = (
+        select(IngestionJob)
+        .options(selectinload(IngestionJob.steps))
+        .where(IngestionJob.id == job_id)
+    )
+    job = await session.scalar(statement)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Ingestion job not found.")
+    if job.status == "processing":
+        raise HTTPException(status_code=409, detail="Ingestion job is already processing.")
+
+    job.status = "queued"
+    job.current_stage = "queued"
+    job.failure_reason = None
+    await session.commit()
+    process_document.send(str(job_id))
     return job
 
 
@@ -167,7 +214,9 @@ async def list_documents(
         select(DocumentVersion)
         .options(
             selectinload(DocumentVersion.document),
-            selectinload(DocumentVersion.ingestion_jobs),
+            selectinload(DocumentVersion.ingestion_jobs).selectinload(
+                IngestionJob.steps
+            ),
         )
         .order_by(DocumentVersion.created_at.desc())
     )
@@ -186,6 +235,12 @@ async def list_documents(
                 sha256=version.sha256,
                 status=job.status,
                 current_stage=job.current_stage,
+                parser_used=version.parser_used,
+                page_count=version.page_count,
+                steps=[
+                    TraceStepResponse.model_validate(step)
+                    for step in job.steps
+                ],
             )
         )
     return result

@@ -1,5 +1,7 @@
 import asyncio
+import tempfile
 from functools import lru_cache
+from pathlib import Path
 from typing import BinaryIO
 
 import boto3
@@ -55,6 +57,25 @@ class ObjectStorage:
             Bucket=self.bucket,
             Key=object_key,
         )
+
+    async def download_to_path(self, object_key: str, destination: Path) -> None:
+        await asyncio.to_thread(
+            self.client.download_file,
+            self.bucket,
+            object_key,
+            str(destination),
+        )
+
+    async def upload_bytes(
+        self,
+        payload: bytes,
+        object_key: str,
+        content_type: str,
+    ) -> None:
+        with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as buffered:
+            buffered.write(payload)
+            buffered.seek(0)
+            await self.upload(buffered, object_key, content_type)
 
 
 @lru_cache
