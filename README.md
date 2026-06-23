@@ -36,3 +36,23 @@ Local endpoints:
 
 The checked-in `.env.example` contains placeholders. The local `.env` file is
 ignored by Git and must never contain production credentials.
+
+## Backend health API
+
+Create an isolated environment using the existing Python 3.13 interpreter:
+
+```bash
+./scripts/setup_backend.sh
+```
+
+Start the API:
+
+```bash
+./scripts/start_backend.sh
+```
+
+Health endpoints:
+
+- Liveness: `http://127.0.0.1:18000/api/health/live`
+- Dependency readiness: `http://127.0.0.1:18000/api/health/ready`
+- OpenAPI: `http://127.0.0.1:18000/docs`

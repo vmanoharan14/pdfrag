@@ -10,7 +10,7 @@ Stack:
 - **Metadata DB:** PostgreSQL
 - **Vector DB:** Qdrant
 - **Cache / Queue / Live Events:** Redis
-- **Backend:** Python 3.12 + FastAPI
+- **Backend:** Python 3.13 + FastAPI
 - **Frontend:** React / Next.js
 - **Parser:** Docling primary, Apache Tika fallback
 - **Observability:** visual RAG trace console + OpenTelemetry
@@ -527,6 +527,7 @@ Build the system as vertical, testable increments.
 - Add backend and frontend project structure.
 - Add formatting, linting, type checking, tests, environment validation, and local service orchestration.
 - Document supported hardware profiles and model configuration.
+- Use the existing host Python 3.13 interpreter with an isolated project virtual environment.
 - Add Docker Compose for PostgreSQL, Qdrant, Redis, and MinIO only.
 - Run models and application processes directly on the host.
 - Use npm for the frontend.
