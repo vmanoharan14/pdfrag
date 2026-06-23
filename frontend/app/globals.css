@@ -498,6 +498,43 @@ textarea {
   color: #d7eee5;
 }
 
+.query-analysis-summary {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.query-analysis-summary > span,
+.query-analysis-summary summary {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  color: #d7eee5;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  padding: 6px 9px;
+  text-transform: uppercase;
+}
+
+.query-analysis-summary details {
+  flex-basis: 100%;
+}
+
+.query-analysis-summary summary {
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.query-analysis-summary p {
+  color: #d7eee5;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
 .section-heading {
   align-items: flex-start;
   border-bottom: 1px solid #edf0ee;

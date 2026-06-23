@@ -15,6 +15,11 @@ from app.database import get_session
 from app.generation import GenerationResult, generate_answer
 from app.indexing import collection_name_for, embed_texts_adaptive
 from app.models import Document, DocumentChunk, DocumentVersion, EvidenceFeedback
+from app.query_analysis import (
+    QueryAnalysis,
+    analyze_query,
+    score_payload_for_query_analysis,
+)
 from app.reranking import RerankItem, score_pairs
 from app.sparse_indexing import (
     SPARSE_VECTOR_NAME,
@@ -91,9 +96,18 @@ class AnswerResponse(BaseModel):
     prompt_token_estimate: int
 
 
+class QueryAnalysisResponse(BaseModel):
+    original_query: str
+    retrieval_query: str
+    intent: str
+    topics: list[str]
+    expansions: list[str]
+
+
 class RetrievalResponse(BaseModel):
     query: str
     mode: str
+    query_analysis: QueryAnalysisResponse
     stages: list[RetrievalStage]
     results: list[RetrievalResult]
     packed_context: PackedContextResponse
@@ -141,6 +155,7 @@ class FusedCandidate:
     dense_rank: int | None = None
     sparse_rank: int | None = None
     rerank_score: float | None = None
+    query_match_score: float = 0.0
     channels: set[str] = field(default_factory=set)
 
 
@@ -425,6 +440,16 @@ def answer_response(answer: GenerationResult) -> AnswerResponse:
     )
 
 
+def query_analysis_response(analysis: QueryAnalysis) -> QueryAnalysisResponse:
+    return QueryAnalysisResponse(
+        original_query=analysis.original_query,
+        retrieval_query=analysis.retrieval_query,
+        intent=analysis.intent,
+        topics=analysis.topics,
+        expansions=analysis.expansions,
+    )
+
+
 async def rerank_candidates(
     query: str,
     candidates: list[FusedCandidate],
@@ -455,6 +480,26 @@ async def rerank_candidates(
     )
 
 
+def apply_query_analysis_adjustments(
+    candidates: list[FusedCandidate],
+    analysis: QueryAnalysis,
+) -> list[FusedCandidate]:
+    for candidate in candidates:
+        candidate.query_match_score = score_payload_for_query_analysis(
+            candidate.payload,
+            analysis,
+        )
+    return sorted(
+        candidates,
+        key=lambda item: (
+            (item.rerank_score or 0.0) + item.query_match_score,
+            item.rerank_score if item.rerank_score is not None else float("-inf"),
+            item.fused_score,
+        ),
+        reverse=True,
+    )
+
+
 @router.post("/search", response_model=RetrievalResponse)
 async def search_documents(
     request: RetrievalRequest,
@@ -465,20 +510,28 @@ async def search_documents(
         raise HTTPException(status_code=422, detail="Query cannot be blank.")
 
     settings = get_settings()
+    started_at = time.perf_counter()
+    analysis = analyze_query(query)
     stages: list[RetrievalStage] = [
         RetrievalStage(
             sequence=1,
-            stage="query received",
+            stage="query analysis",
             status="completed",
-            message="Accepted the user question for retrieval.",
-            duration_ms=0,
-            details={"query_length": len(query)},
+            message="Analyzed the question and expanded retrieval terms.",
+            duration_ms=elapsed_ms(started_at),
+            details={
+                "intent": analysis.intent,
+                "topics": analysis.topics,
+                "expansions": analysis.expansions,
+                "original_query_length": len(query),
+                "retrieval_query_length": len(analysis.retrieval_query),
+            },
         )
     ]
 
     try:
         started_at = time.perf_counter()
-        dense_points, dense_details = await query_dense(query, settings)
+        dense_points, dense_details = await query_dense(analysis.retrieval_query, settings)
         raw_dense_count = len(dense_points)
         dense_points = await keep_active_points(session, dense_points)
         dense_details["returned_after_active_filter"] = len(dense_points)
@@ -495,7 +548,7 @@ async def search_documents(
         )
 
         started_at = time.perf_counter()
-        sparse_points, sparse_details = await query_sparse(query, settings)
+        sparse_points, sparse_details = await query_sparse(analysis.retrieval_query, settings)
         raw_sparse_count = len(sparse_points)
         sparse_points = await keep_active_points(session, sparse_points)
         sparse_details["returned_after_active_filter"] = len(sparse_points)
@@ -536,11 +589,21 @@ async def search_documents(
     reranker_message = "Reranked fused candidates with the local MiniLM cross-encoder."
     try:
         ranked = await rerank_candidates(query, fused, settings)
+        ranked = apply_query_analysis_adjustments(ranked, analysis)
         reranker_details = {
             "model": settings.reranker_model,
             "candidate_count": len(fused),
             "reranked_count": len(ranked),
             "best_score": ranked[0].rerank_score if ranked else None,
+            "query_match_adjustments": [
+                {
+                    "chunk_id": candidate.chunk_id,
+                    "adjustment": candidate.query_match_score,
+                    "section_title": candidate.payload.get("section_title"),
+                }
+                for candidate in ranked
+                if candidate.query_match_score
+            ],
         }
     except Exception as exc:
         ranked = fused
@@ -647,6 +710,7 @@ async def search_documents(
     return RetrievalResponse(
         query=query,
         mode="generated_answer",
+        query_analysis=query_analysis_response(analysis),
         stages=stages,
         results=results,
         packed_context=packed_context_response(packed_context),

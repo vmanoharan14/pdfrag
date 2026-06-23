@@ -33,6 +33,7 @@ type RetrievalResult = {
 type RetrievalResponse = {
   query: string;
   mode: string;
+  query_analysis: QueryAnalysis;
   stages: RetrievalStage[];
   results: RetrievalResult[];
   packed_context: PackedContext;
@@ -40,6 +41,14 @@ type RetrievalResponse = {
 };
 
 type FeedbackLabel = "correct" | "incomplete" | "wrong";
+
+type QueryAnalysis = {
+  original_query: string;
+  retrieval_query: string;
+  intent: string;
+  topics: string[];
+  expansions: string[];
+};
 
 type Answer = {
   text: string;
@@ -234,6 +243,23 @@ export default function ChatPage() {
               </span>
               <span>{response.answer.prompt_token_estimate} prompt tokens est.</span>
               <span>{response.answer.prompt_chars} prompt chars</span>
+            </div>
+            <div className="query-analysis-summary">
+              <span>intent: {response.query_analysis.intent.replaceAll("_", " ")}</span>
+              <span>
+                topics:{" "}
+                {response.query_analysis.topics.length
+                  ? response.query_analysis.topics
+                      .map((topic) => topic.replaceAll("_", " "))
+                      .join(", ")
+                  : "none"}
+              </span>
+              {response.query_analysis.expansions.length ? (
+                <details>
+                  <summary>Expanded retrieval terms</summary>
+                  <p>{response.query_analysis.expansions.join(", ")}</p>
+                </details>
+              ) : null}
             </div>
           </section>
         ) : null}
