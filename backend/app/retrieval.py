@@ -27,6 +27,7 @@ from app.query_analysis import (
     analyze_query,
     score_payload_for_query_analysis,
 )
+from app.query_router import RouterDecision, route_query
 from app.reranking import RerankItem, score_pairs
 from app.sparse_indexing import (
     SPARSE_VECTOR_NAME,
@@ -113,11 +114,23 @@ class QueryAnalysisResponse(BaseModel):
     expansions: list[str]
 
 
+class RouterDecisionResponse(BaseModel):
+    source: str
+    model: str
+    intent: str
+    requested_retrieval_path: str
+    selected_retrieval_path: str
+    needs_rewrite: bool
+    rewrite_query: str
+    fallback_reason: str | None = None
+
+
 class RetrievalResponse(BaseModel):
     trace_id: uuid.UUID
     query: str
     mode: str
     query_analysis: QueryAnalysisResponse
+    router_decision: RouterDecisionResponse
     stages: list[RetrievalStage]
     results: list[RetrievalResult]
     packed_context: PackedContextResponse
@@ -547,6 +560,19 @@ def query_analysis_response(analysis: QueryAnalysis) -> QueryAnalysisResponse:
     )
 
 
+def router_decision_response(decision: RouterDecision) -> RouterDecisionResponse:
+    return RouterDecisionResponse(
+        source=decision.source,
+        model=decision.model,
+        intent=decision.intent,
+        requested_retrieval_path=decision.requested_retrieval_path,
+        selected_retrieval_path=decision.selected_retrieval_path,
+        needs_rewrite=decision.needs_rewrite,
+        rewrite_query=decision.rewrite_query,
+        fallback_reason=decision.fallback_reason,
+    )
+
+
 def evidence_status_for_answer(answer: GenerationResult, context: PackedContext) -> str:
     if not context.blocks:
         return "no_evidence"
@@ -575,6 +601,8 @@ async def persist_retrieval_trace(
         answer=response.answer.text,
         citations=response.answer.citation_ids,
         query_analysis=response.query_analysis.model_dump(mode="json"),
+        # Stored separately in model_details for now to avoid a schema migration
+        # for one advisory router field.
         selected_chunks=[
             result.model_dump(mode="json")
             for result in response.results[: len(response.packed_context.blocks)]
@@ -583,6 +611,7 @@ async def persist_retrieval_trace(
         timings_ms=timings_from_stages(response.stages),
         cache_event="miss",
         model_details={
+            "router": response.router_decision.model_dump(mode="json"),
             "generation_model": response.answer.model,
             "prompt_chars": response.answer.prompt_chars,
             "prompt_token_estimate": response.answer.prompt_token_estimate,
@@ -693,6 +722,40 @@ async def search_documents(
         )
     ]
 
+    started_at = time.perf_counter()
+    router_decision = await route_query(query, analysis, settings)
+    stages.append(
+        RetrievalStage(
+            sequence=2,
+            stage="intent routing",
+            status=(
+                "completed"
+                if router_decision.source == "gemma"
+                else "skipped"
+                if router_decision.source == "deterministic"
+                else "fallback"
+            ),
+            message=(
+                "Selected retrieval path with the local router model."
+                if router_decision.source == "gemma"
+                else "LLM router disabled locally; used deterministic hybrid routing."
+                if router_decision.source == "deterministic"
+                else "Router unavailable or invalid; used deterministic hybrid fallback."
+            ),
+            duration_ms=elapsed_ms(started_at),
+            details={
+                "source": router_decision.source,
+                "model": router_decision.model,
+                "intent": router_decision.intent,
+                "requested_retrieval_path": router_decision.requested_retrieval_path,
+                "selected_retrieval_path": router_decision.selected_retrieval_path,
+                "needs_rewrite": router_decision.needs_rewrite,
+                "rewrite_query_length": len(router_decision.rewrite_query),
+                "fallback_reason": router_decision.fallback_reason,
+            },
+        )
+    )
+
     try:
         started_at = time.perf_counter()
         dense_points, dense_details = await query_dense(analysis.retrieval_query, settings)
@@ -702,7 +765,7 @@ async def search_documents(
         dense_details["stale_discarded"] = raw_dense_count - len(dense_points)
         stages.append(
             RetrievalStage(
-                sequence=2,
+                sequence=3,
                 stage="dense retrieval",
                 status="completed",
                 message="Retrieved semantic candidates and kept active DB chunks.",
@@ -719,7 +782,7 @@ async def search_documents(
         sparse_details["stale_discarded"] = raw_sparse_count - len(sparse_points)
         stages.append(
             RetrievalStage(
-                sequence=3,
+                sequence=4,
                 stage="sparse retrieval",
                 status="completed",
                 message="Retrieved lexical candidates and kept active DB chunks.",
@@ -734,7 +797,7 @@ async def search_documents(
     fused = reciprocal_rank_fuse(dense_points, sparse_points)
     stages.append(
         RetrievalStage(
-            sequence=4,
+            sequence=5,
             stage="rank fusion",
             status="completed",
             message="Fused dense and sparse rankings using reciprocal rank fusion.",
@@ -752,7 +815,7 @@ async def search_documents(
     ranked, expansion_details = await expand_candidates_with_neighbors(session, fused)
     stages.append(
         RetrievalStage(
-            sequence=5,
+            sequence=6,
             stage="candidate expansion",
             status="completed",
             message="Added neighboring chunks around fused candidates before reranking.",
@@ -793,7 +856,7 @@ async def search_documents(
         }
     stages.append(
         RetrievalStage(
-            sequence=6,
+            sequence=7,
             stage="rerank",
             status=reranker_status,
             message=reranker_message,
@@ -804,7 +867,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=7,
+            sequence=8,
             stage="context packing",
             status="completed",
             message="Packed selected evidence into the context that Qwen will receive next.",
@@ -830,7 +893,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=8,
+            sequence=9,
             stage="answer generation",
             status="completed",
             message="Generated a grounded answer from packed evidence with Qwen.",
@@ -871,7 +934,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=9,
+            sequence=10,
             stage="evidence preview",
             status="completed",
             message="Returned answer, top evidence chunks, and packed context.",
@@ -889,6 +952,7 @@ async def search_documents(
         query=query,
         mode="generated_answer",
         query_analysis=query_analysis_response(analysis),
+        router_decision=router_decision_response(router_decision),
         stages=stages,
         results=results,
         packed_context=packed_context_response(packed_context),
