@@ -119,7 +119,7 @@ export default function ChatPage() {
     setError(null);
 
     try {
-      const apiResponse = await fetch(`${backendUrl}/api/retrieval/search`, {
+      const apiResponse = await fetch(`${backendUrl}/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
