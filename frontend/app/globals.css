@@ -952,6 +952,53 @@ input {
   text-transform: capitalize;
 }
 
+.chunk-preview {
+  border-top: 1px solid #e3e9e5;
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.chunk-card {
+  background: #ffffff;
+  border: 1px solid #e1e7e3;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.chunk-meta {
+  align-items: center;
+  color: #6f7d75;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 10px;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.chunk-meta strong {
+  color: #20382e;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.chunk-meta span {
+  background: #f1f5f2;
+  border-radius: 999px;
+  padding: 3px 7px;
+}
+
+.chunk-card p,
+.chunk-loading {
+  color: #40534a;
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 0;
+  max-height: 130px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 @keyframes queue-pulse {
   50% {
     opacity: 0.35;

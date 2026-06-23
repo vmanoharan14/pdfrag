@@ -12,12 +12,13 @@ from docling.datamodel.accelerator_options import AcceleratorDevice, Accelerator
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.broker import broker as _broker  # noqa: F401
+from app.chunking import chunk_markdown
 from app.database import session_factory
-from app.models import DocumentVersion, IngestionJob, IngestionTraceStep
+from app.models import DocumentChunk, DocumentVersion, IngestionJob, IngestionTraceStep
 from app.storage import get_object_storage
 
 
@@ -139,49 +140,6 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
         )
 
         with tempfile.TemporaryDirectory(prefix="pdfrag-parse-") as temp_dir:
-            source_path = Path(temp_dir) / version.source_filename
-
-            started = perf_counter()
-            await add_trace_step(
-                session,
-                job,
-                "source_download",
-                "running",
-                "Downloading the original from MinIO.",
-            )
-            await storage.download_to_path(version.object_key, source_path)
-            await add_trace_step(
-                session,
-                job,
-                "source_download",
-                "completed",
-                "Original downloaded from MinIO.",
-                details={"size_bytes": version.size_bytes},
-                duration_ms=round((perf_counter() - started) * 1000),
-            )
-
-            started = perf_counter()
-            await add_trace_step(
-                session,
-                job,
-                "parse",
-                "running",
-                "Parsing document content.",
-            )
-            if source_path.suffix.lower() == ".pdf":
-                parsed = await asyncio.to_thread(parse_pdf, source_path)
-            else:
-                parsed = await asyncio.to_thread(parse_text, source_path)
-            await add_trace_step(
-                session,
-                job,
-                "parse",
-                "completed",
-                f"Parsed with {parsed.parser_used}.",
-                details=parsed.details,
-                duration_ms=round((perf_counter() - started) * 1000),
-            )
-
             parsed_key = (
                 f"local-development/{version.document_id}/{version.id}"
                 "/parsed/document.md"
@@ -190,57 +148,185 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
                 f"local-development/{version.document_id}/{version.id}"
                 "/parsed/metadata.json"
             )
+            if version.parsed_text_object_key:
+                parsed_path = Path(temp_dir) / "parsed.md"
+                started = perf_counter()
+                await add_trace_step(
+                    session,
+                    job,
+                    "parsed_artifact_download",
+                    "running",
+                    "Downloading existing canonical Markdown from MinIO.",
+                )
+                await storage.download_to_path(version.parsed_text_object_key, parsed_path)
+                markdown = await asyncio.to_thread(parsed_path.read_text, encoding="utf-8")
+                parsed = ParsedDocument(
+                    markdown=markdown,
+                    parser_used=version.parser_used or "stored-markdown",
+                    page_count=version.page_count,
+                    details={
+                        "characters": len(markdown),
+                        "reused_parsed_artifact": True,
+                    },
+                )
+                await add_trace_step(
+                    session,
+                    job,
+                    "parsed_artifact_download",
+                    "completed",
+                    "Canonical Markdown downloaded from MinIO.",
+                    details={"markdown_object_key": version.parsed_text_object_key},
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+                await add_trace_step(
+                    session,
+                    job,
+                    "parse",
+                    "completed",
+                    "Reused existing parsed Markdown artifact.",
+                    details=parsed.details,
+                )
+            else:
+                source_path = Path(temp_dir) / version.source_filename
+
+                started = perf_counter()
+                await add_trace_step(
+                    session,
+                    job,
+                    "source_download",
+                    "running",
+                    "Downloading the original from MinIO.",
+                )
+                await storage.download_to_path(version.object_key, source_path)
+                await add_trace_step(
+                    session,
+                    job,
+                    "source_download",
+                    "completed",
+                    "Original downloaded from MinIO.",
+                    details={"size_bytes": version.size_bytes},
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+
+                started = perf_counter()
+                await add_trace_step(
+                    session,
+                    job,
+                    "parse",
+                    "running",
+                    "Parsing document content.",
+                )
+                if source_path.suffix.lower() == ".pdf":
+                    parsed = await asyncio.to_thread(parse_pdf, source_path)
+                else:
+                    parsed = await asyncio.to_thread(parse_text, source_path)
+                await add_trace_step(
+                    session,
+                    job,
+                    "parse",
+                    "completed",
+                    f"Parsed with {parsed.parser_used}.",
+                    details=parsed.details,
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+
+                started = perf_counter()
+                await add_trace_step(
+                    session,
+                    job,
+                    "artifact_write",
+                    "running",
+                    "Writing canonical parsed artifacts to MinIO.",
+                )
+                await storage.upload_bytes(
+                    parsed.markdown.encode("utf-8"),
+                    parsed_key,
+                    "text/markdown",
+                )
+                await storage.upload_bytes(
+                    json.dumps(
+                        {
+                            "parser_used": parsed.parser_used,
+                            "page_count": parsed.page_count,
+                            **parsed.details,
+                        },
+                        indent=2,
+                    ).encode("utf-8"),
+                    metadata_key,
+                    "application/json",
+                )
+                version.parser_used = parsed.parser_used
+                version.page_count = parsed.page_count
+                version.parsed_text_object_key = parsed_key
+                version.status = "parsed"
+                await add_trace_step(
+                    session,
+                    job,
+                    "artifact_write",
+                    "completed",
+                    "Canonical Markdown and parser metadata stored in MinIO.",
+                    details={
+                        "markdown_object_key": parsed_key,
+                        "metadata_object_key": metadata_key,
+                    },
+                    duration_ms=round((perf_counter() - started) * 1000),
+                )
+
             started = perf_counter()
             await add_trace_step(
                 session,
                 job,
-                "artifact_write",
+                "chunk",
                 "running",
-                "Writing canonical parsed artifacts to MinIO.",
+                "Creating layout-aware Markdown chunks.",
             )
-            await storage.upload_bytes(
-                parsed.markdown.encode("utf-8"),
-                parsed_key,
-                "text/markdown",
+            chunks = chunk_markdown(parsed.markdown)
+            if not chunks:
+                raise ValueError("Parsed document produced no chunks.")
+
+            await session.execute(
+                delete(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
             )
-            await storage.upload_bytes(
-                json.dumps(
-                    {
-                        "parser_used": parsed.parser_used,
-                        "page_count": parsed.page_count,
-                        **parsed.details,
-                    },
-                    indent=2,
-                ).encode("utf-8"),
-                metadata_key,
-                "application/json",
+            session.add_all(
+                [
+                    DocumentChunk(
+                        document_version_id=version.id,
+                        chunk_index=chunk.chunk_index,
+                        content=chunk.content,
+                        token_estimate=chunk.token_estimate,
+                        section_title=chunk.section_title,
+                        element_type=chunk.element_type,
+                        metadata_=chunk.metadata,
+                    )
+                    for chunk in chunks
+                ]
             )
-            version.parser_used = parsed.parser_used
-            version.page_count = parsed.page_count
-            version.parsed_text_object_key = parsed_key
-            version.status = "parsed"
-            job.status = "completed"
+            version.status = "active"
+            await session.commit()
             await add_trace_step(
                 session,
                 job,
-                "artifact_write",
+                "chunk",
                 "completed",
-                "Canonical Markdown and parser metadata stored in MinIO.",
+                f"Created {len(chunks)} chunks.",
                 details={
-                    "markdown_object_key": parsed_key,
-                    "metadata_object_key": metadata_key,
+                    "chunk_count": len(chunks),
+                    "chunker": "markdown-layout-v1",
                 },
                 duration_ms=round((perf_counter() - started) * 1000),
             )
+
+            job.status = "completed"
             await add_trace_step(
                 session,
                 job,
                 "ingestion_complete",
                 "completed",
-                "Parsing completed. The document is ready for chunking.",
+                "Parsing and chunking completed. The document is ready for indexing.",
                 details={
                     "parser_used": parsed.parser_used,
                     "page_count": parsed.page_count,
+                    "chunk_count": len(chunks),
                 },
             )
 

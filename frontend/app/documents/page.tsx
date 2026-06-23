@@ -14,6 +14,7 @@ type DocumentItem = {
   current_stage: string;
   parser_used: string | null;
   page_count: number | null;
+  chunk_count: number;
   steps: TraceStep[];
 };
 
@@ -24,6 +25,17 @@ type TraceStep = {
   message: string | null;
   details: Record<string, unknown> | null;
   duration_ms: number | null;
+};
+
+type DocumentChunk = {
+  id: string;
+  chunk_index: number;
+  content: string;
+  token_estimate: number;
+  section_title: string | null;
+  element_type: string;
+  page_number: number | null;
+  metadata: Record<string, unknown> | null;
 };
 
 const backendUrl =
@@ -37,8 +49,10 @@ function formatBytes(value: number) {
 
 function collapseTraceSteps(steps: TraceStep[]): TraceStep[] {
   const grouped = new Map<string, TraceStep>();
+  const latestRunStart = steps.findLastIndex((step) => step.stage === "worker_started");
+  const currentRunSteps = latestRunStart >= 0 ? steps.slice(latestRunStart) : steps;
 
-  for (const step of steps) {
+  for (const step of currentRunSteps) {
     const existing = grouped.get(step.stage);
     if (!existing) {
       grouped.set(step.stage, step);
@@ -60,6 +74,10 @@ function collapseTraceSteps(steps: TraceStep[]): TraceStep[] {
 
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [chunksByVersion, setChunksByVersion] = useState<
+    Record<string, DocumentChunk[]>
+  >({});
+  const [expandedVersionId, setExpandedVersionId] = useState<string | null>(null);
   const [selected, setSelected] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -168,6 +186,31 @@ export default function DocumentsPage() {
     }
   }
 
+  async function toggleChunks(versionId: string) {
+    if (expandedVersionId === versionId) {
+      setExpandedVersionId(null);
+      return;
+    }
+
+    setExpandedVersionId(versionId);
+    if (chunksByVersion[versionId]) return;
+
+    setError(null);
+    try {
+      const response = await fetch(
+        `${backendUrl}/api/document-versions/${versionId}/chunks?limit=25`,
+        { cache: "no-store" },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail ?? "Could not load chunks.");
+      }
+      setChunksByVersion((current) => ({ ...current, [versionId]: payload }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Request failed.");
+    }
+  }
+
   return (
     <>
       <header className="topbar">
@@ -261,22 +304,34 @@ export default function DocumentsPage() {
                     {stageSteps.length > 0 ? (
                       <div className="ingestion-trace">
                         <div className="ingestion-trace-summary">
-                          <span>
-                            {item.parser_used ?? "Parser pending"}
-                            {item.page_count ? ` · ${item.page_count} page(s)` : ""}
-                          </span>
-                          <div>
-                            <strong>{item.status}</strong>
-                            {item.status === "queued" || item.status === "failed" ? (
-                              <button
-                                className="retry-button"
-                                onClick={() => void retryJob(item.job_id)}
-                                type="button"
-                              >
-                                Process
-                              </button>
-                            ) : null}
-                          </div>
+                        <span>
+                          {item.parser_used ?? "Parser pending"}
+                          {item.page_count ? ` · ${item.page_count} page(s)` : ""}
+                          {` · ${item.chunk_count} chunk(s)`}
+                        </span>
+                        <div>
+                          <strong>{item.status}</strong>
+                          {item.chunk_count > 0 ? (
+                            <button
+                              className="retry-button"
+                              onClick={() => void toggleChunks(item.version_id)}
+                              type="button"
+                            >
+                              {expandedVersionId === item.version_id ? "Hide chunks" : "View chunks"}
+                            </button>
+                          ) : null}
+                          {item.status === "queued" ||
+                          item.status === "failed" ||
+                          (item.status === "completed" && item.chunk_count === 0) ? (
+                            <button
+                              className="retry-button"
+                              onClick={() => void retryJob(item.job_id)}
+                              type="button"
+                            >
+                              {item.status === "completed" ? "Build chunks" : "Process"}
+                            </button>
+                          ) : null}
+                        </div>
                         </div>
                         <ol>
                           {stageSteps.map((step, index) => (
@@ -299,6 +354,26 @@ export default function DocumentsPage() {
                             </li>
                           ))}
                         </ol>
+                        {expandedVersionId === item.version_id ? (
+                          <div className="chunk-preview">
+                            {(chunksByVersion[item.version_id] ?? []).map((chunk) => (
+                              <article className="chunk-card" key={chunk.id}>
+                                <div className="chunk-meta">
+                                  <strong>#{chunk.chunk_index + 1}</strong>
+                                  <span>{chunk.element_type}</span>
+                                  <span>{chunk.token_estimate} tokens est.</span>
+                                  {chunk.section_title ? (
+                                    <span>{chunk.section_title}</span>
+                                  ) : null}
+                                </div>
+                                <p>{chunk.content}</p>
+                              </article>
+                            ))}
+                            {!chunksByVersion[item.version_id] ? (
+                              <p className="chunk-loading">Loading chunks…</p>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <div className="ingestion-trace empty-trace">

@@ -5,14 +5,14 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_session
-from app.models import Document, DocumentVersion, IngestionJob
+from app.models import Document, DocumentChunk, DocumentVersion, IngestionJob
 from app.parsing import process_document
 from app.storage import ObjectStorage, get_object_storage
 
@@ -71,7 +71,19 @@ class DocumentListItem(BaseModel):
     current_stage: str
     parser_used: str | None
     page_count: int | None
+    chunk_count: int
     steps: list[TraceStepResponse]
+
+
+class DocumentChunkResponse(BaseModel):
+    id: uuid.UUID
+    chunk_index: int
+    content: str
+    token_estimate: int
+    section_title: str | None
+    element_type: str
+    page_number: int | None
+    metadata: dict | None
 
 
 def safe_filename(filename: str) -> str:
@@ -221,6 +233,12 @@ async def list_documents(
         .order_by(DocumentVersion.created_at.desc())
     )
     versions = (await session.scalars(statement)).all()
+    chunk_count_rows = await session.execute(
+        select(DocumentChunk.document_version_id, func.count(DocumentChunk.id)).group_by(
+            DocumentChunk.document_version_id
+        )
+    )
+    chunk_counts = {version_id: count for version_id, count in chunk_count_rows.all()}
     result: list[DocumentListItem] = []
     for version in versions:
         job = max(version.ingestion_jobs, key=lambda item: item.created_at)
@@ -237,6 +255,7 @@ async def list_documents(
                 current_stage=job.current_stage,
                 parser_used=version.parser_used,
                 page_count=version.page_count,
+                chunk_count=int(chunk_counts.get(version.id, 0)),
                 steps=[
                     TraceStepResponse.model_validate(step)
                     for step in job.steps
@@ -244,3 +263,38 @@ async def list_documents(
             )
         )
     return result
+
+
+@router.get(
+    "/document-versions/{version_id}/chunks",
+    response_model=list[DocumentChunkResponse],
+)
+async def list_document_chunks(
+    version_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> list[DocumentChunkResponse]:
+    version = await session.get(DocumentVersion, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Document version not found.")
+
+    statement = (
+        select(DocumentChunk)
+        .where(DocumentChunk.document_version_id == version_id)
+        .order_by(DocumentChunk.chunk_index)
+        .limit(limit)
+    )
+    chunks = (await session.scalars(statement)).all()
+    return [
+        DocumentChunkResponse(
+            id=chunk.id,
+            chunk_index=chunk.chunk_index,
+            content=chunk.content,
+            token_estimate=chunk.token_estimate,
+            section_title=chunk.section_title,
+            element_type=chunk.element_type,
+            page_number=chunk.page_number,
+            metadata=chunk.metadata_,
+        )
+        for chunk in chunks
+    ]

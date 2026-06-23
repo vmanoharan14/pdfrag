@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -78,6 +78,11 @@ class DocumentVersion(Base):
         back_populates="document_version",
         cascade="all, delete-orphan",
     )
+    chunks: Mapped[list["DocumentChunk"]] = relationship(
+        back_populates="document_version",
+        cascade="all, delete-orphan",
+        order_by="DocumentChunk.chunk_index",
+    )
 
 
 class IngestionJob(Base):
@@ -152,3 +157,39 @@ class IngestionTraceStep(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer)
 
     ingestion_job: Mapped[IngestionJob] = relationship(back_populates="steps")
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_version_id",
+            "chunk_index",
+            name="uq_document_chunks_version_index",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("document_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    token_estimate: Mapped[int] = mapped_column(Integer, nullable=False)
+    section_title: Mapped[str | None] = mapped_column(String(512))
+    element_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    document_version: Mapped[DocumentVersion] = relationship(back_populates="chunks")
