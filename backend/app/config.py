@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     minio_bucket: str = "documents"
 
     ollama_base_url: str = "http://127.0.0.1:11434"
+    dense_embedding_model: str = "nomic-embed-text:latest"
+    qdrant_dense_collection_prefix: str = "pdfrag_chunks_dense"
     required_ollama_models: list[str] = Field(
         default_factory=lambda: [
             "gemma2:2b",

@@ -72,6 +72,8 @@ class DocumentListItem(BaseModel):
     parser_used: str | None
     page_count: int | None
     chunk_count: int
+    indexed_chunk_count: int
+    vector_collection: str | None
     steps: list[TraceStepResponse]
 
 
@@ -84,6 +86,10 @@ class DocumentChunkResponse(BaseModel):
     element_type: str
     page_number: int | None
     metadata: dict | None
+    index_status: str
+    vector_collection: str | None
+    embedding_model: str | None
+    embedding_dimension: int | None
 
 
 def safe_filename(filename: str) -> str:
@@ -234,11 +240,23 @@ async def list_documents(
     )
     versions = (await session.scalars(statement)).all()
     chunk_count_rows = await session.execute(
-        select(DocumentChunk.document_version_id, func.count(DocumentChunk.id)).group_by(
-            DocumentChunk.document_version_id
-        )
+        select(
+            DocumentChunk.document_version_id,
+            func.count(DocumentChunk.id),
+            func.count(DocumentChunk.indexed_at),
+            func.max(DocumentChunk.vector_collection),
+        ).group_by(DocumentChunk.document_version_id)
     )
-    chunk_counts = {version_id: count for version_id, count in chunk_count_rows.all()}
+    chunk_stats = {
+        version_id: {
+            "chunk_count": int(chunk_count),
+            "indexed_chunk_count": int(indexed_chunk_count),
+            "vector_collection": vector_collection,
+        }
+        for version_id, chunk_count, indexed_chunk_count, vector_collection in (
+            chunk_count_rows.all()
+        )
+    }
     result: list[DocumentListItem] = []
     for version in versions:
         job = max(version.ingestion_jobs, key=lambda item: item.created_at)
@@ -255,7 +273,13 @@ async def list_documents(
                 current_stage=job.current_stage,
                 parser_used=version.parser_used,
                 page_count=version.page_count,
-                chunk_count=int(chunk_counts.get(version.id, 0)),
+                chunk_count=chunk_stats.get(version.id, {}).get("chunk_count", 0),
+                indexed_chunk_count=chunk_stats.get(version.id, {}).get(
+                    "indexed_chunk_count", 0
+                ),
+                vector_collection=chunk_stats.get(version.id, {}).get(
+                    "vector_collection"
+                ),
                 steps=[
                     TraceStepResponse.model_validate(step)
                     for step in job.steps
@@ -295,6 +319,10 @@ async def list_document_chunks(
             element_type=chunk.element_type,
             page_number=chunk.page_number,
             metadata=chunk.metadata_,
+            index_status=chunk.index_status,
+            vector_collection=chunk.vector_collection,
+            embedding_model=chunk.embedding_model,
+            embedding_dimension=chunk.embedding_dimension,
         )
         for chunk in chunks
     ]

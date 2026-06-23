@@ -14,10 +14,12 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.broker import broker as _broker  # noqa: F401
 from app.chunking import chunk_markdown
 from app.database import session_factory
+from app.indexing import index_chunks_dense
 from app.models import DocumentChunk, DocumentVersion, IngestionJob, IngestionTraceStep
 from app.storage import get_object_storage
 
@@ -123,7 +125,11 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
         job = await session.get(IngestionJob, job_id)
         if job is None:
             raise ValueError(f"Ingestion job {job_id} does not exist.")
-        version = await session.get(DocumentVersion, job.document_version_id)
+        version = await session.scalar(
+            select(DocumentVersion)
+            .options(selectinload(DocumentVersion.document))
+            .where(DocumentVersion.id == job.document_version_id)
+        )
         if version is None:
             raise ValueError(f"Document version {job.document_version_id} does not exist.")
         if job.status == "completed":
@@ -287,21 +293,21 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
             await session.execute(
                 delete(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
             )
-            session.add_all(
-                [
-                    DocumentChunk(
-                        document_version_id=version.id,
-                        chunk_index=chunk.chunk_index,
-                        content=chunk.content,
-                        token_estimate=chunk.token_estimate,
-                        section_title=chunk.section_title,
-                        element_type=chunk.element_type,
-                        metadata_=chunk.metadata,
-                    )
-                    for chunk in chunks
-                ]
-            )
-            version.status = "active"
+            db_chunks = [
+                DocumentChunk(
+                    document_version_id=version.id,
+                    chunk_index=chunk.chunk_index,
+                    content=chunk.content,
+                    token_estimate=chunk.token_estimate,
+                    section_title=chunk.section_title,
+                    element_type=chunk.element_type,
+                    metadata_=chunk.metadata,
+                )
+                for chunk in chunks
+            ]
+            session.add_all(db_chunks)
+            version.status = "chunked"
+            await session.flush()
             await session.commit()
             await add_trace_step(
                 session,
@@ -316,17 +322,44 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
                 duration_ms=round((perf_counter() - started) * 1000),
             )
 
+            started = perf_counter()
+            await add_trace_step(
+                session,
+                job,
+                "dense_index",
+                "running",
+                "Embedding chunks and writing dense vectors to Qdrant.",
+            )
+            index_result = await index_chunks_dense(session, version, db_chunks)
+            version.status = "active"
+            await session.commit()
+            await add_trace_step(
+                session,
+                job,
+                "dense_index",
+                "completed",
+                f"Indexed {index_result.point_count} dense vectors.",
+                details={
+                    "collection": index_result.collection_name,
+                    "embedding_model": index_result.embedding_model,
+                    "embedding_dimension": index_result.embedding_dimension,
+                    "point_count": index_result.point_count,
+                },
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+
             job.status = "completed"
             await add_trace_step(
                 session,
                 job,
                 "ingestion_complete",
                 "completed",
-                "Parsing and chunking completed. The document is ready for indexing.",
+                "Dense indexing completed. Sparse/BM25 indexing is pending.",
                 details={
                     "parser_used": parsed.parser_used,
                     "page_count": parsed.page_count,
                     "chunk_count": len(chunks),
+                    "dense_vectors": index_result.point_count,
                 },
             )
 

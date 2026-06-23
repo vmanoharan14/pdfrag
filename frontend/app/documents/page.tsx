@@ -15,6 +15,8 @@ type DocumentItem = {
   parser_used: string | null;
   page_count: number | null;
   chunk_count: number;
+  indexed_chunk_count: number;
+  vector_collection: string | null;
   steps: TraceStep[];
 };
 
@@ -36,6 +38,10 @@ type DocumentChunk = {
   element_type: string;
   page_number: number | null;
   metadata: Record<string, unknown> | null;
+  index_status: string;
+  vector_collection: string | null;
+  embedding_model: string | null;
+  embedding_dimension: number | null;
 };
 
 const backendUrl =
@@ -308,6 +314,9 @@ export default function DocumentsPage() {
                           {item.parser_used ?? "Parser pending"}
                           {item.page_count ? ` · ${item.page_count} page(s)` : ""}
                           {` · ${item.chunk_count} chunk(s)`}
+                          {item.indexed_chunk_count > 0
+                            ? ` · ${item.indexed_chunk_count} indexed`
+                            : ""}
                         </span>
                         <div>
                           <strong>{item.status}</strong>
@@ -322,13 +331,19 @@ export default function DocumentsPage() {
                           ) : null}
                           {item.status === "queued" ||
                           item.status === "failed" ||
+                          (item.status === "completed" &&
+                            item.indexed_chunk_count < item.chunk_count) ||
                           (item.status === "completed" && item.chunk_count === 0) ? (
                             <button
                               className="retry-button"
                               onClick={() => void retryJob(item.job_id)}
                               type="button"
                             >
-                              {item.status === "completed" ? "Build chunks" : "Process"}
+                              {item.status !== "completed"
+                                ? "Process"
+                                : item.chunk_count > 0
+                                  ? "Build index"
+                                  : "Build chunks"}
                             </button>
                           ) : null}
                         </div>
@@ -362,8 +377,17 @@ export default function DocumentsPage() {
                                   <strong>#{chunk.chunk_index + 1}</strong>
                                   <span>{chunk.element_type}</span>
                                   <span>{chunk.token_estimate} tokens est.</span>
+                                  <span>{chunk.index_status}</span>
                                   {chunk.section_title ? (
                                     <span>{chunk.section_title}</span>
+                                  ) : null}
+                                  {chunk.embedding_model ? (
+                                    <span>
+                                      {chunk.embedding_model}
+                                      {chunk.embedding_dimension
+                                        ? `/${chunk.embedding_dimension}`
+                                        : ""}
+                                    </span>
                                   ) : null}
                                 </div>
                                 <p>{chunk.content}</p>

@@ -186,6 +186,12 @@ class DocumentChunk(Base):
     element_type: Mapped[str] = mapped_column(String(50), nullable=False)
     page_number: Mapped[int | None] = mapped_column(Integer)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+    index_status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    vector_point_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), unique=True)
+    vector_collection: Mapped[str | None] = mapped_column(String(255))
+    embedding_model: Mapped[str | None] = mapped_column(String(255))
+    embedding_dimension: Mapped[int | None] = mapped_column(Integer)
+    indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
