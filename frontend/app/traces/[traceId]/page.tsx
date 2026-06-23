@@ -134,12 +134,18 @@ export default async function TracePage({
             <div className="answer-preview">
               <span>Answer</span>
               <p>{trace.answer}</p>
-              <small>
-                citations{" "}
-                {trace.citations.length
-                  ? trace.citations.map((id) => `[${id}]`).join(", ")
-                  : "—"}
-              </small>
+              {trace.citations.length ? (
+                <div className="citation-chips" aria-label="Answer citations">
+                  <span>citations</span>
+                  {trace.citations.map((id) => (
+                    <a className="citation-chip" href={`#trace-evidence-${id}`} key={id}>
+                      [{id}]
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <small>citations —</small>
+              )}
             </div>
           </div>
           <dl className="trace-metrics">
@@ -256,7 +262,11 @@ export default async function TracePage({
             {packedBlocks.length ? (
               <div className="retrieval-results">
                 {packedBlocks.map((block) => (
-                  <article className="retrieval-result" key={block.citation_id}>
+                  <article
+                    className="retrieval-result"
+                    id={`trace-evidence-${block.citation_id}`}
+                    key={block.citation_id}
+                  >
                     <div className="result-head">
                       <span>{block.citation_id}</span>
                       <div>

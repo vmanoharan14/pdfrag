@@ -109,6 +109,7 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [feedbackByChunk, setFeedbackByChunk] = useState<Record<string, FeedbackLabel>>({});
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [activeCitation, setActiveCitation] = useState<string | null>(null);
 
   async function runRetrieval(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -133,11 +134,21 @@ export default function ChatPage() {
       setResponse(payload);
       setFeedbackByChunk({});
       setFeedbackError(null);
+      setActiveCitation(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Retrieval failed.");
     } finally {
       setLoading(false);
     }
+  }
+
+  function selectCitation(citationId: string) {
+    setActiveCitation(citationId);
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`chat-evidence-${citationId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
   }
 
   async function submitFeedback(result: RetrievalResult, label: FeedbackLabel) {
@@ -238,12 +249,23 @@ export default function ChatPage() {
             <p>{response.answer.text}</p>
             <div className="score-row">
               <Link href={`/traces/${response.trace_id}`}>open stored trace</Link>
-              <span>
-                citations{" "}
-                {response.answer.citation_ids.length
-                  ? response.answer.citation_ids.map((id) => `[${id}]`).join(", ")
-                  : "—"}
-              </span>
+              {response.answer.citation_ids.length ? (
+                <div className="citation-chips" aria-label="Answer citations">
+                  <span>citations</span>
+                  {response.answer.citation_ids.map((id) => (
+                    <button
+                      className={activeCitation === id ? "citation-chip active" : "citation-chip"}
+                      key={id}
+                      type="button"
+                      onClick={() => selectCitation(id)}
+                    >
+                      [{id}]
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <span>citations —</span>
+              )}
               <span>{response.answer.prompt_token_estimate} prompt tokens est.</span>
               <span>{response.answer.prompt_chars} prompt chars</span>
             </div>
@@ -422,7 +444,15 @@ export default function ChatPage() {
 
                 <div className="context-blocks">
                   {response.packed_context.blocks.map((block) => (
-                    <article className="context-block" key={block.citation_id}>
+                    <article
+                      className={
+                        activeCitation === block.citation_id
+                          ? "context-block active"
+                          : "context-block"
+                      }
+                      id={`chat-evidence-${block.citation_id}`}
+                      key={block.citation_id}
+                    >
                       <h3>
                         [{block.citation_id}] {block.source_filename ?? "Unknown source"}
                       </h3>

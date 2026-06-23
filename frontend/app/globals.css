@@ -665,6 +665,39 @@ textarea {
   text-transform: uppercase;
 }
 
+.citation-chips {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.citation-chips > span {
+  color: inherit;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.citation-chip {
+  background: #e5f7ee;
+  border: 1px solid #bce4cf;
+  border-radius: 999px;
+  color: #08764a;
+  cursor: pointer;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 6px 9px;
+}
+
+.citation-chip:hover,
+.citation-chip.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: white;
+}
+
 .result-text {
   background: #f7faf8;
   border-radius: 12px;
@@ -730,6 +763,22 @@ textarea {
   border: 1px solid #e6eee9;
   border-radius: 12px;
   padding: 11px 12px;
+  scroll-margin: 120px;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.context-block.active,
+.retrieval-result:target {
+  background: #fff8dd;
+  border-color: #e4bf45;
+  box-shadow: 0 0 0 4px rgba(228, 191, 69, 0.18);
+}
+
+.retrieval-result {
+  scroll-margin: 120px;
 }
 
 .context-block h3 {
