@@ -501,6 +501,20 @@ Measure at minimum:
 
 No model or prompt upgrade is promoted solely from public benchmark results. It must improve the project evaluation set without violating the relevant latency and infrastructure budget.
 
+Use deterministic and directly measurable metrics as the primary evaluation
+gates. Add RAGAS as an optional offline evaluation adapter for:
+
+- faithfulness
+- response relevance
+- context precision
+- context recall
+
+RAGAS must not be part of the request-time query pipeline. Run it against
+versioned evaluation datasets and store the evaluator model, prompt, metric
+version, and raw rationale with each result. Treat LLM-judged scores as
+directional evidence rather than ground truth, and do not use the answer model
+as the only evaluator of its own responses.
+
 ---
 
 ## 10. Delivery Milestones
@@ -544,6 +558,8 @@ Build the system as vertical, testable increments.
 - Full visual trace console.
 - Feedback and evaluation entities.
 - Automated retrieval, grounding, security, and latency evaluation gates.
+- Optional offline RAGAS adapter for faithfulness, response relevance, context
+  precision, and context recall.
 
 ### Milestone 4A: Authentication and Tenant Isolation
 
