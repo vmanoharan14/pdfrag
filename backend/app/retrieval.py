@@ -14,7 +14,14 @@ from app.context_packing import PackedContext, pack_context
 from app.database import get_session
 from app.generation import GenerationResult, generate_answer
 from app.indexing import collection_name_for, embed_texts_adaptive
-from app.models import Document, DocumentChunk, DocumentVersion, EvidenceFeedback
+from app.models import (
+    Document,
+    DocumentChunk,
+    DocumentVersion,
+    EvidenceFeedback,
+    RagTrace,
+    RagTraceStep,
+)
 from app.query_analysis import (
     QueryAnalysis,
     analyze_query,
@@ -107,6 +114,7 @@ class QueryAnalysisResponse(BaseModel):
 
 
 class RetrievalResponse(BaseModel):
+    trace_id: uuid.UUID
     query: str
     mode: str
     query_analysis: QueryAnalysisResponse
@@ -539,6 +547,73 @@ def query_analysis_response(analysis: QueryAnalysis) -> QueryAnalysisResponse:
     )
 
 
+def evidence_status_for_answer(answer: GenerationResult, context: PackedContext) -> str:
+    if not context.blocks:
+        return "no_evidence"
+    if answer.answer.strip().lower().startswith("not enough evidence"):
+        return "insufficient_evidence"
+    return "answered"
+
+
+def timings_from_stages(stages: list[RetrievalStage]) -> dict[str, int]:
+    return {stage.stage: stage.duration_ms for stage in stages}
+
+
+async def persist_retrieval_trace(
+    session: AsyncSession,
+    *,
+    response: RetrievalResponse,
+) -> None:
+    trace = RagTrace(
+        id=response.trace_id,
+        tenant_id="local-development",
+        user_id="local-user",
+        original_question=response.query,
+        normalized_query=response.query_analysis.retrieval_query,
+        mode=response.mode,
+        evidence_status=evidence_status_for_answer_model(response.answer, response.packed_context),
+        answer=response.answer.text,
+        citations=response.answer.citation_ids,
+        query_analysis=response.query_analysis.model_dump(mode="json"),
+        selected_chunks=[
+            result.model_dump(mode="json")
+            for result in response.results[: len(response.packed_context.blocks)]
+        ],
+        packed_context=response.packed_context.model_dump(mode="json"),
+        timings_ms=timings_from_stages(response.stages),
+        cache_event="miss",
+        model_details={
+            "generation_model": response.answer.model,
+            "prompt_chars": response.answer.prompt_chars,
+            "prompt_token_estimate": response.answer.prompt_token_estimate,
+        },
+    )
+    trace.steps = [
+        RagTraceStep(
+            sequence=stage.sequence,
+            stage=stage.stage,
+            status=stage.status,
+            message=stage.message,
+            duration_ms=stage.duration_ms,
+            details=stage.details,
+        )
+        for stage in response.stages
+    ]
+    session.add(trace)
+    await session.commit()
+
+
+def evidence_status_for_answer_model(
+    answer: AnswerResponse,
+    context: PackedContextResponse,
+) -> str:
+    if not context.blocks:
+        return "no_evidence"
+    if answer.text.strip().lower().startswith("not enough evidence"):
+        return "insufficient_evidence"
+    return "answered"
+
+
 async def rerank_candidates(
     query: str,
     candidates: list[FusedCandidate],
@@ -809,7 +884,8 @@ async def search_documents(
     for rank, result in enumerate(results, start=1):
         result.final_rank = rank
 
-    return RetrievalResponse(
+    response = RetrievalResponse(
+        trace_id=uuid.uuid4(),
         query=query,
         mode="generated_answer",
         query_analysis=query_analysis_response(analysis),
@@ -818,6 +894,9 @@ async def search_documents(
         packed_context=packed_context_response(packed_context),
         answer=answer_response(generated_answer),
     )
+    await persist_retrieval_trace(session, response=response)
+
+    return response
 
 
 @router.post("/feedback", response_model=EvidenceFeedbackResponse, status_code=201)

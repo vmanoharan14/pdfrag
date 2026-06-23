@@ -259,3 +259,80 @@ class EvidenceFeedback(Base):
         nullable=False,
         server_default=func.now(),
     )
+
+
+class RagTrace(Base):
+    __tablename__ = "rag_traces"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="local-development",
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="local-user",
+        index=True,
+    )
+    original_question: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_query: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(String(100), nullable=False)
+    evidence_status: Mapped[str] = mapped_column(String(100), nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list | None] = mapped_column(JSON)
+    query_analysis: Mapped[dict | None] = mapped_column(JSON)
+    selected_chunks: Mapped[list | None] = mapped_column(JSON)
+    packed_context: Mapped[dict | None] = mapped_column(JSON)
+    timings_ms: Mapped[dict | None] = mapped_column(JSON)
+    cache_event: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="miss",
+    )
+    model_details: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    steps: Mapped[list["RagTraceStep"]] = relationship(
+        back_populates="trace",
+        cascade="all, delete-orphan",
+        order_by="RagTraceStep.sequence",
+    )
+
+
+class RagTraceStep(Base):
+    __tablename__ = "rag_trace_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    trace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("rag_traces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    stage: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    details: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    trace: Mapped[RagTrace] = relationship(back_populates="steps")

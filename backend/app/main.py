@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.documents import router as documents_router
 from app.health import dependency_health
 from app.retrieval import router as retrieval_router
+from app.traces import router as traces_router
 
 
 @asynccontextmanager
@@ -29,6 +30,7 @@ app.add_middleware(
 )
 app.include_router(documents_router)
 app.include_router(retrieval_router)
+app.include_router(traces_router)
 
 
 @app.get("/api/health/live")
