@@ -35,9 +35,31 @@ type RetrievalResponse = {
   mode: string;
   stages: RetrievalStage[];
   results: RetrievalResult[];
+  packed_context: PackedContext;
 };
 
 type FeedbackLabel = "correct" | "incomplete" | "wrong";
+
+type ContextBlock = {
+  citation_id: string;
+  chunk_id: string;
+  source_filename: string | null;
+  chunk_index: number | null;
+  section_title: string | null;
+  page_number: number | null;
+  text: string;
+  char_count: number;
+  token_estimate: number;
+};
+
+type PackedContext = {
+  blocks: ContextBlock[];
+  prompt_context: string;
+  char_count: number;
+  token_estimate: number;
+  max_chars: number;
+  truncated: boolean;
+};
 
 const backendUrl =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:18000";
@@ -165,7 +187,8 @@ export default function ChatPage() {
               This step stops before answer generation. It shows dense retrieval,
               sparse retrieval, rank fusion, reranking, and the evidence selected
               for the future answer step. Mark which chunks are actually useful so
-              we can build evaluation data before changing models.
+              we can build evaluation data before changing models. The packed
+              context panel shows exactly what the generator will receive next.
             </p>
           </div>
 
@@ -226,7 +249,7 @@ export default function ChatPage() {
             ) : (
               <p className="document-empty">
                 Run a query to see dense retrieval, sparse retrieval, rank fusion,
-                reranking, and evidence preview stages.
+                reranking, context packing, and evidence preview stages.
               </p>
             )}
           </div>
@@ -322,6 +345,42 @@ export default function ChatPage() {
                 Evidence chunks will appear here after a query.
               </p>
             )}
+
+            {response ? (
+              <div className="packed-context-card">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Context</p>
+                    <h2>Prompt evidence pack</h2>
+                  </div>
+                  <small>
+                    {response.packed_context.token_estimate} est. tokens ·{" "}
+                    {response.packed_context.char_count}/
+                    {response.packed_context.max_chars} chars
+                  </small>
+                </div>
+
+                <div className="context-blocks">
+                  {response.packed_context.blocks.map((block) => (
+                    <article className="context-block" key={block.citation_id}>
+                      <h3>
+                        [{block.citation_id}] {block.source_filename ?? "Unknown source"}
+                      </h3>
+                      <p>
+                        Chunk {block.chunk_index ?? "—"}
+                        {block.section_title ? ` · ${block.section_title}` : ""}
+                        {block.page_number ? ` · page ${block.page_number}` : ""}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+
+                <details className="prompt-preview">
+                  <summary>Show packed prompt context</summary>
+                  <pre>{response.packed_context.prompt_context}</pre>
+                </details>
+              </div>
+            ) : null}
           </div>
         </section>
       </div>

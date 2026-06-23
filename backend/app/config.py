@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_cache_dir: str = ".runtime/hf/hub"
     reranker_local_files_only: bool = True
+    context_max_chars: int = 6000
+    context_max_chunks: int = 6
     required_ollama_models: list[str] = Field(
         default_factory=lambda: [
             "gemma2:2b",

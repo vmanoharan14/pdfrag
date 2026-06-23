@@ -486,6 +486,10 @@ textarea {
   text-transform: uppercase;
 }
 
+.section-heading.compact {
+  margin-top: 20px;
+}
+
 .retrieval-stage-list,
 .retrieval-results {
   display: grid;
@@ -625,6 +629,59 @@ textarea {
   background: var(--brand);
   border-color: var(--brand);
   color: white;
+}
+
+.packed-context-card {
+  border-top: 1px solid #edf0ee;
+  margin-top: 22px;
+  padding-top: 2px;
+}
+
+.context-blocks {
+  display: grid;
+  gap: 8px;
+}
+
+.context-block {
+  background: #f7faf8;
+  border: 1px solid #e6eee9;
+  border-radius: 12px;
+  padding: 11px 12px;
+}
+
+.context-block h3 {
+  font-size: 13px;
+  margin: 0 0 5px;
+}
+
+.context-block p {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}
+
+.prompt-preview {
+  margin-top: 12px;
+}
+
+.prompt-preview summary {
+  color: var(--brand-dark);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.prompt-preview pre {
+  background: #102e24;
+  border-radius: 12px;
+  color: #d8eee6;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  max-height: 360px;
+  overflow: auto;
+  padding: 14px;
+  white-space: pre-wrap;
 }
 
 .form-error {

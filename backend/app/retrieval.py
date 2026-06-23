@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.context_packing import PackedContext, pack_context
 from app.database import get_session
 from app.indexing import collection_name_for, embed_texts_adaptive
 from app.models import Document, DocumentChunk, DocumentVersion, EvidenceFeedback
@@ -60,11 +61,33 @@ class RetrievalResult(BaseModel):
     final_rank: int
 
 
+class ContextBlockResponse(BaseModel):
+    citation_id: str
+    chunk_id: str
+    source_filename: str | None
+    chunk_index: int | None
+    section_title: str | None
+    page_number: int | None
+    text: str
+    char_count: int
+    token_estimate: int
+
+
+class PackedContextResponse(BaseModel):
+    blocks: list[ContextBlockResponse]
+    prompt_context: str
+    char_count: int
+    token_estimate: int
+    max_chars: int
+    truncated: bool
+
+
 class RetrievalResponse(BaseModel):
     query: str
     mode: str
     stages: list[RetrievalStage]
     results: list[RetrievalResult]
+    packed_context: PackedContextResponse
 
 
 class EvidenceFeedbackRequest(BaseModel):
@@ -358,6 +381,30 @@ def score_to_text(score: float | None) -> str | None:
     return str(score)
 
 
+def packed_context_response(context: PackedContext) -> PackedContextResponse:
+    return PackedContextResponse(
+        blocks=[
+            ContextBlockResponse(
+                citation_id=block.citation_id,
+                chunk_id=block.chunk_id,
+                source_filename=block.source_filename,
+                chunk_index=block.chunk_index,
+                section_title=block.section_title,
+                page_number=block.page_number,
+                text=block.text,
+                char_count=block.char_count,
+                token_estimate=block.token_estimate,
+            )
+            for block in context.blocks
+        ],
+        prompt_context=context.prompt_context,
+        char_count=context.char_count,
+        token_estimate=context.token_estimate,
+        max_chars=context.max_chars,
+        truncated=context.truncated,
+    )
+
+
 async def rerank_candidates(
     query: str,
     candidates: list[FusedCandidate],
@@ -498,6 +545,32 @@ async def search_documents(
     stages.append(
         RetrievalStage(
             sequence=6,
+            stage="context packing",
+            status="completed",
+            message="Packed selected evidence into the context that Qwen will receive next.",
+            duration_ms=0,
+            details={},
+        )
+    )
+
+    started_at = time.perf_counter()
+    packed_context = pack_context(
+        ranked,
+        max_chars=settings.context_max_chars,
+        max_chunks=settings.context_max_chunks,
+    )
+    stages[-1].duration_ms = elapsed_ms(started_at)
+    stages[-1].details = {
+        "selected_chunks": len(packed_context.blocks),
+        "char_count": packed_context.char_count,
+        "token_estimate": packed_context.token_estimate,
+        "max_chars": packed_context.max_chars,
+        "truncated": packed_context.truncated,
+    }
+
+    stages.append(
+        RetrievalStage(
+            sequence=7,
             stage="evidence preview",
             status="completed",
             message="Returned top evidence chunks. Generation is intentionally not active yet.",
@@ -512,9 +585,10 @@ async def search_documents(
 
     return RetrievalResponse(
         query=query,
-        mode="retrieval_rerank_only",
+        mode="retrieval_rerank_context_only",
         stages=stages,
         results=results,
+        packed_context=packed_context_response(packed_context),
     )
 
 
