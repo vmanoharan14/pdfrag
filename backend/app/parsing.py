@@ -21,6 +21,7 @@ from app.chunking import chunk_markdown
 from app.database import session_factory
 from app.indexing import index_chunks_dense
 from app.models import DocumentChunk, DocumentVersion, IngestionJob, IngestionTraceStep
+from app.sparse_indexing import index_chunks_sparse
 from app.storage import get_object_storage
 
 
@@ -348,18 +349,42 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
                 duration_ms=round((perf_counter() - started) * 1000),
             )
 
+            started = perf_counter()
+            await add_trace_step(
+                session,
+                job,
+                "sparse_index",
+                "running",
+                "Encoding lexical sparse vectors and writing them to Qdrant.",
+            )
+            sparse_result = await index_chunks_sparse(session, version, db_chunks)
+            await add_trace_step(
+                session,
+                job,
+                "sparse_index",
+                "completed",
+                f"Indexed {sparse_result.point_count} sparse vectors.",
+                details={
+                    "collection": sparse_result.collection_name,
+                    "encoder_model": sparse_result.encoder_model,
+                    "point_count": sparse_result.point_count,
+                },
+                duration_ms=round((perf_counter() - started) * 1000),
+            )
+
             job.status = "completed"
             await add_trace_step(
                 session,
                 job,
                 "ingestion_complete",
                 "completed",
-                "Dense indexing completed. Sparse/BM25 indexing is pending.",
+                "Dense and sparse indexing completed. The document is ready for retrieval.",
                 details={
                     "parser_used": parsed.parser_used,
                     "page_count": parsed.page_count,
                     "chunk_count": len(chunks),
                     "dense_vectors": index_result.point_count,
+                    "sparse_vectors": sparse_result.point_count,
                 },
             )
 

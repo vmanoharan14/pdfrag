@@ -17,6 +17,8 @@ type DocumentItem = {
   chunk_count: number;
   indexed_chunk_count: number;
   vector_collection: string | null;
+  sparse_indexed_chunk_count: number;
+  sparse_vector_collection: string | null;
   steps: TraceStep[];
 };
 
@@ -42,6 +44,9 @@ type DocumentChunk = {
   vector_collection: string | null;
   embedding_model: string | null;
   embedding_dimension: number | null;
+  sparse_index_status: string;
+  sparse_vector_collection: string | null;
+  sparse_encoder_model: string | null;
 };
 
 const backendUrl =
@@ -315,7 +320,10 @@ export default function DocumentsPage() {
                           {item.page_count ? ` · ${item.page_count} page(s)` : ""}
                           {` · ${item.chunk_count} chunk(s)`}
                           {item.indexed_chunk_count > 0
-                            ? ` · ${item.indexed_chunk_count} indexed`
+                            ? ` · ${item.indexed_chunk_count} dense`
+                            : ""}
+                          {item.sparse_indexed_chunk_count > 0
+                            ? ` · ${item.sparse_indexed_chunk_count} sparse`
                             : ""}
                         </span>
                         <div>
@@ -332,7 +340,8 @@ export default function DocumentsPage() {
                           {item.status === "queued" ||
                           item.status === "failed" ||
                           (item.status === "completed" &&
-                            item.indexed_chunk_count < item.chunk_count) ||
+                            (item.indexed_chunk_count < item.chunk_count ||
+                              item.sparse_indexed_chunk_count < item.chunk_count)) ||
                           (item.status === "completed" && item.chunk_count === 0) ? (
                             <button
                               className="retry-button"
@@ -377,7 +386,8 @@ export default function DocumentsPage() {
                                   <strong>#{chunk.chunk_index + 1}</strong>
                                   <span>{chunk.element_type}</span>
                                   <span>{chunk.token_estimate} tokens est.</span>
-                                  <span>{chunk.index_status}</span>
+                                  <span>dense: {chunk.index_status}</span>
+                                  <span>sparse: {chunk.sparse_index_status}</span>
                                   {chunk.section_title ? (
                                     <span>{chunk.section_title}</span>
                                   ) : null}
@@ -388,6 +398,9 @@ export default function DocumentsPage() {
                                         ? `/${chunk.embedding_dimension}`
                                         : ""}
                                     </span>
+                                  ) : null}
+                                  {chunk.sparse_encoder_model ? (
+                                    <span>{chunk.sparse_encoder_model}</span>
                                   ) : null}
                                 </div>
                                 <p>{chunk.content}</p>

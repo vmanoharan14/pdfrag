@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
     dense_embedding_model: str = "nomic-embed-text:latest"
     qdrant_dense_collection_prefix: str = "pdfrag_chunks_dense"
+    sparse_encoder_model: str = "qdrant-bm25-local-v1"
+    qdrant_sparse_collection_prefix: str = "pdfrag_chunks_sparse"
     required_ollama_models: list[str] = Field(
         default_factory=lambda: [
             "gemma2:2b",

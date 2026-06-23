@@ -95,5 +95,6 @@ Start the ingestion worker in a separate terminal:
 The local worker intentionally uses one process and one thread to bound CPU and
 memory use while Docling parses documents. A successful ingestion now parses the
 source, writes canonical Markdown to MinIO, creates local Markdown-layout chunks
-in PostgreSQL, indexes dense vectors in Qdrant with `nomic-embed-text`, and marks
-the document version active.
+in PostgreSQL, indexes dense vectors in Qdrant with `nomic-embed-text`, writes
+BM25-compatible sparse lexical vectors to Qdrant, and marks the document version
+active.

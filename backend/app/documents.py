@@ -74,6 +74,8 @@ class DocumentListItem(BaseModel):
     chunk_count: int
     indexed_chunk_count: int
     vector_collection: str | None
+    sparse_indexed_chunk_count: int
+    sparse_vector_collection: str | None
     steps: list[TraceStepResponse]
 
 
@@ -90,6 +92,9 @@ class DocumentChunkResponse(BaseModel):
     vector_collection: str | None
     embedding_model: str | None
     embedding_dimension: int | None
+    sparse_index_status: str
+    sparse_vector_collection: str | None
+    sparse_encoder_model: str | None
 
 
 def safe_filename(filename: str) -> str:
@@ -245,6 +250,8 @@ async def list_documents(
             func.count(DocumentChunk.id),
             func.count(DocumentChunk.indexed_at),
             func.max(DocumentChunk.vector_collection),
+            func.count(DocumentChunk.sparse_indexed_at),
+            func.max(DocumentChunk.sparse_vector_collection),
         ).group_by(DocumentChunk.document_version_id)
     )
     chunk_stats = {
@@ -252,10 +259,17 @@ async def list_documents(
             "chunk_count": int(chunk_count),
             "indexed_chunk_count": int(indexed_chunk_count),
             "vector_collection": vector_collection,
+            "sparse_indexed_chunk_count": int(sparse_indexed_chunk_count),
+            "sparse_vector_collection": sparse_vector_collection,
         }
-        for version_id, chunk_count, indexed_chunk_count, vector_collection in (
-            chunk_count_rows.all()
-        )
+        for (
+            version_id,
+            chunk_count,
+            indexed_chunk_count,
+            vector_collection,
+            sparse_indexed_chunk_count,
+            sparse_vector_collection,
+        ) in chunk_count_rows.all()
     }
     result: list[DocumentListItem] = []
     for version in versions:
@@ -279,6 +293,12 @@ async def list_documents(
                 ),
                 vector_collection=chunk_stats.get(version.id, {}).get(
                     "vector_collection"
+                ),
+                sparse_indexed_chunk_count=chunk_stats.get(version.id, {}).get(
+                    "sparse_indexed_chunk_count", 0
+                ),
+                sparse_vector_collection=chunk_stats.get(version.id, {}).get(
+                    "sparse_vector_collection"
                 ),
                 steps=[
                     TraceStepResponse.model_validate(step)
@@ -323,6 +343,9 @@ async def list_document_chunks(
             vector_collection=chunk.vector_collection,
             embedding_model=chunk.embedding_model,
             embedding_dimension=chunk.embedding_dimension,
+            sparse_index_status=chunk.sparse_index_status,
+            sparse_vector_collection=chunk.sparse_vector_collection,
+            sparse_encoder_model=chunk.sparse_encoder_model,
         )
         for chunk in chunks
     ]
