@@ -3,6 +3,7 @@ import uuid
 from app.retrieval import (
     FusedCandidate,
     RetrievedPoint,
+    local_security_context_stage,
     neighbor_indices_for_candidate_payloads,
     parse_retrieved_points,
     reciprocal_rank_fuse,
@@ -89,3 +90,14 @@ def test_neighbor_indices_for_candidate_payloads_uses_same_version_window() -> N
     assert indices == {
         uuid.UUID("00000000-0000-0000-0000-000000000001"): {9, 11, 1}
     }
+
+
+def test_local_security_context_stage_uses_fixed_development_principal() -> None:
+    stage = local_security_context_stage(sequence=2)
+
+    assert stage.stage == "security context"
+    assert stage.status == "completed"
+    assert stage.details["tenant_id"] == "local-development"
+    assert stage.details["user_id"] == "local-user"
+    assert stage.details["principal_id"] == "local-development-principal"
+    assert stage.details["acl_filter_applied"] is False

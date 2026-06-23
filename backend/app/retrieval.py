@@ -43,6 +43,9 @@ FUSED_LIMIT = 8
 RRF_K = 60
 EXPANSION_WINDOW = 1
 EXPANSION_SEED_LIMIT = 6
+LOCAL_TENANT_ID = "local-development"
+LOCAL_USER_ID = "local-user"
+LOCAL_PRINCIPAL_ID = "local-development-principal"
 
 
 class RetrievalRequest(BaseModel):
@@ -184,6 +187,24 @@ class FusedCandidate:
 
 def elapsed_ms(started_at: float) -> int:
     return int((time.perf_counter() - started_at) * 1000)
+
+
+def local_security_context_stage(sequence: int, duration_ms: int = 0) -> RetrievalStage:
+    return RetrievalStage(
+        sequence=sequence,
+        stage="security context",
+        status="completed",
+        message="Applied fixed local development principal and tenant context.",
+        duration_ms=duration_ms,
+        details={
+            "tenant_id": LOCAL_TENANT_ID,
+            "user_id": LOCAL_USER_ID,
+            "principal_id": LOCAL_PRINCIPAL_ID,
+            "acl_mode": "local_placeholder",
+            "acl_filter_applied": False,
+            "auth_source": "server_fixed_local_v1",
+        },
+    )
 
 
 def extract_points(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -723,10 +744,13 @@ async def search_documents(
     ]
 
     started_at = time.perf_counter()
+    stages.append(local_security_context_stage(sequence=2, duration_ms=elapsed_ms(started_at)))
+
+    started_at = time.perf_counter()
     router_decision = await route_query(query, analysis, settings)
     stages.append(
         RetrievalStage(
-            sequence=2,
+            sequence=3,
             stage="intent routing",
             status=(
                 "completed"
@@ -765,7 +789,7 @@ async def search_documents(
         dense_details["stale_discarded"] = raw_dense_count - len(dense_points)
         stages.append(
             RetrievalStage(
-                sequence=3,
+                sequence=4,
                 stage="dense retrieval",
                 status="completed",
                 message="Retrieved semantic candidates and kept active DB chunks.",
@@ -782,7 +806,7 @@ async def search_documents(
         sparse_details["stale_discarded"] = raw_sparse_count - len(sparse_points)
         stages.append(
             RetrievalStage(
-                sequence=4,
+                sequence=5,
                 stage="sparse retrieval",
                 status="completed",
                 message="Retrieved lexical candidates and kept active DB chunks.",
@@ -797,7 +821,7 @@ async def search_documents(
     fused = reciprocal_rank_fuse(dense_points, sparse_points)
     stages.append(
         RetrievalStage(
-            sequence=5,
+            sequence=6,
             stage="rank fusion",
             status="completed",
             message="Fused dense and sparse rankings using reciprocal rank fusion.",
@@ -815,7 +839,7 @@ async def search_documents(
     ranked, expansion_details = await expand_candidates_with_neighbors(session, fused)
     stages.append(
         RetrievalStage(
-            sequence=6,
+            sequence=7,
             stage="candidate expansion",
             status="completed",
             message="Added neighboring chunks around fused candidates before reranking.",
@@ -856,7 +880,7 @@ async def search_documents(
         }
     stages.append(
         RetrievalStage(
-            sequence=7,
+            sequence=8,
             stage="rerank",
             status=reranker_status,
             message=reranker_message,
@@ -867,7 +891,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=8,
+            sequence=9,
             stage="context packing",
             status="completed",
             message="Packed selected evidence into the context that Qwen will receive next.",
@@ -893,7 +917,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=9,
+            sequence=10,
             stage="answer generation",
             status="completed",
             message="Generated a grounded answer from packed evidence with Qwen.",
@@ -934,7 +958,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=10,
+            sequence=11,
             stage="evidence preview",
             status="completed",
             message="Returned answer, top evidence chunks, and packed context.",

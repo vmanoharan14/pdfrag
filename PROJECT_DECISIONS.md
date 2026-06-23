@@ -79,6 +79,7 @@ Current request-time pipeline:
 
 ```text
 query analysis
+security context, fixed local principal in local v1
 intent routing, skipped locally by default
 dense retrieval
 sparse/BM25 retrieval
@@ -93,6 +94,27 @@ trace persistence
 
 Dense retrieval handles semantic matches. Sparse/BM25 retrieval handles exact
 terms, IDs, dates, codes, and table-like values. Both are needed.
+
+## Security Context Decision
+
+Local v1 uses a fixed server-side principal. Clients do not submit authoritative
+tenant, user, role, or ACL identifiers.
+
+Current local trace stage:
+
+```text
+security context
+tenant_id: local-development
+user_id: local-user
+principal_id: local-development-principal
+acl_mode: local_placeholder
+acl_filter_applied: false
+auth_source: server_fixed_local_v1
+```
+
+This is not production authorization. It is a visible placeholder so the query
+pipeline has the correct stage shape before real OIDC, tenant memberships,
+roles, and ACL filters are added.
 
 ## Query Expansion Decision
 
@@ -257,24 +279,20 @@ npm run build
 
 ## Pending Slices in Recommended Order
 
-1. Add citation click/highlight behavior in chat and trace pages so `[E1]`
-   maps visibly to the exact evidence block.
-2. Add a minimal ACL/security-context trace stage using the fixed local
-   principal; do not add real auth yet.
-3. Add golden retrieval/evidence quality tests for known questions:
+1. Add golden retrieval/evidence quality tests for known questions:
    enrollment, anxiety/mental health, and no-evidence.
-4. Add a lightweight evaluation runner for golden questions using
+2. Add a lightweight evaluation runner for golden questions using
    deterministic metrics first.
-5. Add optional offline RAGAS adapter.
-6. Add response/cache foundation only after safe cache keys are defined.
-7. Add SSE streaming for answer text and live trace events.
-8. Add conversation support with provenance-safe summaries.
-9. Improve ingestion quality metrics: parser coverage, table/form/OCR
+3. Add optional offline RAGAS adapter.
+4. Add response/cache foundation only after safe cache keys are defined.
+5. Add SSE streaming for answer text and live trace events.
+6. Add conversation support with provenance-safe summaries.
+7. Improve ingestion quality metrics: parser coverage, table/form/OCR
     indicators.
-10. Add table/form-aware chunking and retrieval.
-11. Add DOCX/PPTX/XLSX/CSV/HTML support.
-12. Add admin trace list/search page.
-13. Add authentication and tenant isolation after local v1 is stable.
+8. Add table/form-aware chunking and retrieval.
+9. Add DOCX/PPTX/XLSX/CSV/HTML support.
+10. Add admin trace list/search page.
+11. Add authentication and tenant isolation after local v1 is stable.
 
 ## Open Questions
 
