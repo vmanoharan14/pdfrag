@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.documents import router as documents_router
 from app.health import dependency_health
+from app.retrieval import router as retrieval_router
 
 
 @asynccontextmanager
@@ -27,6 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(documents_router)
+app.include_router(retrieval_router)
 
 
 @app.get("/api/health/live")
