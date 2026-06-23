@@ -211,3 +211,51 @@ class DocumentChunk(Base):
     )
 
     document_version: Mapped[DocumentVersion] = relationship(back_populates="chunks")
+
+
+class EvidenceFeedback(Base):
+    __tablename__ = "evidence_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="local-development",
+        index=True,
+    )
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(String(100), nullable=False)
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("document_chunks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    document_version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("document_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    label: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    final_rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    dense_rank: Mapped[int | None] = mapped_column(Integer)
+    sparse_rank: Mapped[int | None] = mapped_column(Integer)
+    fused_score: Mapped[str | None] = mapped_column(String(100))
+    dense_score: Mapped[str | None] = mapped_column(String(100))
+    sparse_score: Mapped[str | None] = mapped_column(String(100))
+    rerank_score: Mapped[str | None] = mapped_column(String(100))
+    trace: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )

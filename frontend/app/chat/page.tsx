@@ -26,6 +26,8 @@ type RetrievalResult = {
   sparse_score: number | null;
   dense_rank: number | null;
   sparse_rank: number | null;
+  rerank_score: number | null;
+  final_rank: number;
 };
 
 type RetrievalResponse = {
@@ -34,6 +36,8 @@ type RetrievalResponse = {
   stages: RetrievalStage[];
   results: RetrievalResult[];
 };
+
+type FeedbackLabel = "correct" | "incomplete" | "wrong";
 
 const backendUrl =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:18000";
@@ -61,6 +65,8 @@ export default function ChatPage() {
   const [response, setResponse] = useState<RetrievalResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [feedbackByChunk, setFeedbackByChunk] = useState<Record<string, FeedbackLabel>>({});
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
   async function runRetrieval(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -83,10 +89,60 @@ export default function ChatPage() {
         throw new Error(payload.detail ?? "Retrieval failed.");
       }
       setResponse(payload);
+      setFeedbackByChunk({});
+      setFeedbackError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Retrieval failed.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function submitFeedback(result: RetrievalResult, label: FeedbackLabel) {
+    if (!response || !result.document_id || !result.document_version_id) return;
+
+    setFeedbackError(null);
+
+    try {
+      const apiResponse = await fetch(`${backendUrl}/api/retrieval/feedback`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: response.query,
+          mode: response.mode,
+          chunk_id: result.chunk_id,
+          document_id: result.document_id,
+          document_version_id: result.document_version_id,
+          label,
+          final_rank: result.final_rank,
+          dense_rank: result.dense_rank,
+          sparse_rank: result.sparse_rank,
+          fused_score: result.fused_score,
+          dense_score: result.dense_score,
+          sparse_score: result.sparse_score,
+          rerank_score: result.rerank_score,
+          trace: {
+            stages: response.stages.map((stage) => ({
+              sequence: stage.sequence,
+              stage: stage.stage,
+              status: stage.status,
+              duration_ms: stage.duration_ms,
+              details: stage.details,
+            })),
+          },
+        }),
+      });
+      const payload = await apiResponse.json();
+      if (!apiResponse.ok) {
+        throw new Error(payload.detail ?? "Could not save feedback.");
+      }
+      setFeedbackByChunk((current) => ({ ...current, [result.chunk_id]: label }));
+    } catch (caught) {
+      setFeedbackError(
+        caught instanceof Error ? caught.message : "Could not save feedback.",
+      );
     }
   }
 
@@ -97,7 +153,7 @@ export default function ChatPage() {
           <p className="eyebrow">Ask</p>
           <h1>Document chat</h1>
         </div>
-        <span className="status-pill neutral">Retrieval only</span>
+        <span className="status-pill neutral">Retrieval + rerank</span>
       </header>
 
       <div className="page-content chat-workbench">
@@ -106,9 +162,10 @@ export default function ChatPage() {
             <p className="eyebrow">Hybrid search</p>
             <h2>Ask from indexed chunks</h2>
             <p>
-              This step stops before reranking and answer generation. It shows
-              which dense and sparse retrieval stages ran and what evidence was
-              returned.
+              This step stops before answer generation. It shows dense retrieval,
+              sparse retrieval, rank fusion, reranking, and the evidence selected
+              for the future answer step. Mark which chunks are actually useful so
+              we can build evaluation data before changing models.
             </p>
           </div>
 
@@ -135,7 +192,7 @@ export default function ChatPage() {
                 <p className="eyebrow">Trace</p>
                 <h2>Pipeline stages</h2>
               </div>
-              {response ? <small>{response.mode.replace("_", " ")}</small> : null}
+              {response ? <small>{response.mode.replaceAll("_", " ")}</small> : null}
             </div>
 
             {response ? (
@@ -169,7 +226,7 @@ export default function ChatPage() {
             ) : (
               <p className="document-empty">
                 Run a query to see dense retrieval, sparse retrieval, rank fusion,
-                and evidence preview stages.
+                reranking, and evidence preview stages.
               </p>
             )}
           </div>
@@ -182,13 +239,14 @@ export default function ChatPage() {
               </div>
               {response ? <small>{response.results.length} result(s)</small> : null}
             </div>
+            {feedbackError ? <p className="form-error">{feedbackError}</p> : null}
 
             {response?.results.length ? (
               <div className="retrieval-results">
                 {response.results.map((result, index) => (
                   <article className="retrieval-result" key={result.chunk_id}>
                     <div className="result-head">
-                      <span>#{index + 1}</span>
+                      <span>#{result.final_rank || index + 1}</span>
                       <div>
                         <h3>{result.source_filename ?? "Unknown source"}</h3>
                         <p>
@@ -201,6 +259,7 @@ export default function ChatPage() {
 
                     <div className="score-row">
                       <span>fused {formatScore(result.fused_score)}</span>
+                      <span>rerank {formatScore(result.rerank_score)}</span>
                       <span>
                         dense rank {result.dense_rank ?? "—"} / score{" "}
                         {formatScore(result.dense_score)}
@@ -212,6 +271,45 @@ export default function ChatPage() {
                     </div>
 
                     <p className="result-text">{shortText(result.text)}</p>
+
+                    <div className="feedback-panel">
+                      <span>
+                        {feedbackByChunk[result.chunk_id]
+                          ? `Saved: ${feedbackByChunk[result.chunk_id].replace("incomplete", "relevant but incomplete")}`
+                          : "Human review"}
+                      </span>
+                      <div>
+                        <button
+                          className={
+                            feedbackByChunk[result.chunk_id] === "correct" ? "selected" : ""
+                          }
+                          type="button"
+                          onClick={() => void submitFeedback(result, "correct")}
+                        >
+                          Correct evidence
+                        </button>
+                        <button
+                          className={
+                            feedbackByChunk[result.chunk_id] === "incomplete"
+                              ? "selected"
+                              : ""
+                          }
+                          type="button"
+                          onClick={() => void submitFeedback(result, "incomplete")}
+                        >
+                          Relevant but incomplete
+                        </button>
+                        <button
+                          className={
+                            feedbackByChunk[result.chunk_id] === "wrong" ? "selected" : ""
+                          }
+                          type="button"
+                          onClick={() => void submitFeedback(result, "wrong")}
+                        >
+                          Wrong / not useful
+                        </button>
+                      </div>
+                    </div>
                   </article>
                 ))}
               </div>

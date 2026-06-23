@@ -587,6 +587,46 @@ textarea {
   white-space: pre-wrap;
 }
 
+.feedback-panel {
+  align-items: center;
+  border-top: 1px solid #edf0ee;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.feedback-panel > span {
+  color: #6b7972;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.feedback-panel > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feedback-panel button {
+  background: white;
+  border: 1px solid #d9e4de;
+  border-radius: 999px;
+  color: #526159;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 7px 10px;
+}
+
+.feedback-panel button.selected {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: white;
+}
+
 .form-error {
   background: #fff0f0;
   border: 1px solid #ffd1d1;

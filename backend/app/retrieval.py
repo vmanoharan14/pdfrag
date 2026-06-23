@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.database import get_session
 from app.indexing import collection_name_for, embed_texts_adaptive
-from app.models import Document, DocumentChunk, DocumentVersion
+from app.models import Document, DocumentChunk, DocumentVersion, EvidenceFeedback
+from app.reranking import RerankItem, score_pairs
 from app.sparse_indexing import (
     SPARSE_VECTOR_NAME,
     encode_sparse_text,
@@ -55,6 +56,8 @@ class RetrievalResult(BaseModel):
     sparse_score: float | None = None
     dense_rank: int | None = None
     sparse_rank: int | None = None
+    rerank_score: float | None = None
+    final_rank: int
 
 
 class RetrievalResponse(BaseModel):
@@ -62,6 +65,29 @@ class RetrievalResponse(BaseModel):
     mode: str
     stages: list[RetrievalStage]
     results: list[RetrievalResult]
+
+
+class EvidenceFeedbackRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    mode: str = Field(min_length=1, max_length=100)
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    document_version_id: uuid.UUID
+    label: str = Field(pattern="^(correct|incomplete|wrong)$")
+    note: str | None = Field(default=None, max_length=2000)
+    final_rank: int = Field(ge=1)
+    dense_rank: int | None = Field(default=None, ge=1)
+    sparse_rank: int | None = Field(default=None, ge=1)
+    fused_score: float | None = None
+    dense_score: float | None = None
+    sparse_score: float | None = None
+    rerank_score: float | None = None
+    trace: dict[str, Any] | None = None
+
+
+class EvidenceFeedbackResponse(BaseModel):
+    id: uuid.UUID
+    status: str
 
 
 @dataclass(frozen=True)
@@ -81,6 +107,7 @@ class FusedCandidate:
     sparse_score: float | None = None
     dense_rank: int | None = None
     sparse_rank: int | None = None
+    rerank_score: float | None = None
     channels: set[str] = field(default_factory=set)
 
 
@@ -320,6 +347,44 @@ def result_from_candidate(candidate: FusedCandidate) -> RetrievalResult:
         sparse_score=candidate.sparse_score,
         dense_rank=candidate.dense_rank,
         sparse_rank=candidate.sparse_rank,
+        rerank_score=candidate.rerank_score,
+        final_rank=0,
+    )
+
+
+def score_to_text(score: float | None) -> str | None:
+    if score is None:
+        return None
+    return str(score)
+
+
+async def rerank_candidates(
+    query: str,
+    candidates: list[FusedCandidate],
+    settings: Settings,
+) -> list[FusedCandidate]:
+    scores = await score_pairs(
+        query,
+        [
+            RerankItem(
+                chunk_id=candidate.chunk_id,
+                text=str(candidate.payload.get("text") or ""),
+            )
+            for candidate in candidates
+        ],
+        settings,
+    )
+    scores_by_chunk = {score.chunk_id: score.score for score in scores}
+    for candidate in candidates:
+        candidate.rerank_score = scores_by_chunk.get(candidate.chunk_id)
+
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item.rerank_score if item.rerank_score is not None else float("-inf"),
+            item.fused_score,
+        ),
+        reverse=True,
     )
 
 
@@ -398,20 +463,100 @@ async def search_documents(
             },
         )
     )
+
+    started_at = time.perf_counter()
+    reranker_status = "completed"
+    reranker_message = "Reranked fused candidates with the local MiniLM cross-encoder."
+    try:
+        ranked = await rerank_candidates(query, fused, settings)
+        reranker_details = {
+            "model": settings.reranker_model,
+            "candidate_count": len(fused),
+            "reranked_count": len(ranked),
+            "best_score": ranked[0].rerank_score if ranked else None,
+        }
+    except Exception as exc:
+        ranked = fused
+        reranker_status = "failed"
+        reranker_message = "Reranker failed; returned RRF order as fallback."
+        reranker_details = {
+            "model": settings.reranker_model,
+            "candidate_count": len(fused),
+            "error": str(exc),
+        }
     stages.append(
         RetrievalStage(
             sequence=5,
+            stage="rerank",
+            status=reranker_status,
+            message=reranker_message,
+            duration_ms=elapsed_ms(started_at),
+            details=reranker_details,
+        )
+    )
+
+    stages.append(
+        RetrievalStage(
+            sequence=6,
             stage="evidence preview",
             status="completed",
             message="Returned top evidence chunks. Generation is intentionally not active yet.",
             duration_ms=0,
-            details={"returned": len(fused), "limit": FUSED_LIMIT},
+            details={"returned": len(ranked), "limit": FUSED_LIMIT},
         )
     )
 
+    results = [result_from_candidate(candidate) for candidate in ranked]
+    for rank, result in enumerate(results, start=1):
+        result.final_rank = rank
+
     return RetrievalResponse(
         query=query,
-        mode="retrieval_only",
+        mode="retrieval_rerank_only",
         stages=stages,
-        results=[result_from_candidate(candidate) for candidate in fused],
+        results=results,
     )
+
+
+@router.post("/feedback", response_model=EvidenceFeedbackResponse, status_code=201)
+async def record_evidence_feedback(
+    request: EvidenceFeedbackRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> EvidenceFeedbackResponse:
+    statement = (
+        select(DocumentChunk)
+        .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
+        .where(
+            DocumentChunk.id == request.chunk_id,
+            DocumentChunk.document_version_id == request.document_version_id,
+            DocumentVersion.document_id == request.document_id,
+            DocumentVersion.status == "active",
+        )
+    )
+    chunk = await session.scalar(statement)
+    if chunk is None:
+        raise HTTPException(status_code=404, detail="Active evidence chunk not found.")
+
+    feedback = EvidenceFeedback(
+        tenant_id="local-development",
+        query=request.query.strip(),
+        mode=request.mode,
+        chunk_id=request.chunk_id,
+        document_id=request.document_id,
+        document_version_id=request.document_version_id,
+        label=request.label,
+        note=request.note.strip() if request.note else None,
+        final_rank=request.final_rank,
+        dense_rank=request.dense_rank,
+        sparse_rank=request.sparse_rank,
+        fused_score=score_to_text(request.fused_score),
+        dense_score=score_to_text(request.dense_score),
+        sparse_score=score_to_text(request.sparse_score),
+        rerank_score=score_to_text(request.rerank_score),
+        trace=request.trace,
+    )
+    session.add(feedback)
+    await session.commit()
+    await session.refresh(feedback)
+
+    return EvidenceFeedbackResponse(id=feedback.id, status="recorded")

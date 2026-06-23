@@ -2,6 +2,7 @@ from app.retrieval import (
     RetrievedPoint,
     parse_retrieved_points,
     reciprocal_rank_fuse,
+    score_to_text,
 )
 
 
@@ -54,3 +55,8 @@ def test_reciprocal_rank_fuse_combines_dense_and_sparse_matches() -> None:
     assert fused[0].sparse_rank == 1
     assert fused[0].dense_score == 0.8
     assert fused[0].sparse_score == 11.0
+
+
+def test_score_to_text_preserves_none_and_numeric_values() -> None:
+    assert score_to_text(None) is None
+    assert score_to_text(-3.4557268619537354) == "-3.4557268619537354"

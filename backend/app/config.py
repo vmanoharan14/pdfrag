@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     qdrant_dense_collection_prefix: str = "pdfrag_chunks_dense"
     sparse_encoder_model: str = "qdrant-bm25-local-v1"
     qdrant_sparse_collection_prefix: str = "pdfrag_chunks_sparse"
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_cache_dir: str = ".runtime/hf/hub"
+    reranker_local_files_only: bool = True
     required_ollama_models: list[str] = Field(
         default_factory=lambda: [
             "gemma2:2b",
