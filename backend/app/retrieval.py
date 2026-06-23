@@ -6,7 +6,7 @@ from typing import Annotated, Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -33,6 +33,8 @@ DENSE_LIMIT = 12
 SPARSE_LIMIT = 12
 FUSED_LIMIT = 8
 RRF_K = 60
+EXPANSION_WINDOW = 1
+EXPANSION_SEED_LIMIT = 6
 
 
 class RetrievalRequest(BaseModel):
@@ -232,6 +234,32 @@ def reciprocal_rank_fuse(
     )[:limit]
 
 
+def neighbor_indices_for_candidate_payloads(
+    candidates: list[FusedCandidate],
+    *,
+    window: int = EXPANSION_WINDOW,
+    seed_limit: int = EXPANSION_SEED_LIMIT,
+) -> dict[uuid.UUID, set[int]]:
+    indices_by_version: dict[uuid.UUID, set[int]] = {}
+    for candidate in candidates[:seed_limit]:
+        version_id = candidate.payload.get("document_version_id")
+        chunk_index = candidate.payload.get("chunk_index")
+        if not isinstance(version_id, str) or not isinstance(chunk_index, int):
+            continue
+        try:
+            parsed_version_id = uuid.UUID(version_id)
+        except ValueError:
+            continue
+        for offset in range(-window, window + 1):
+            if offset == 0:
+                continue
+            neighbor_index = chunk_index + offset
+            if neighbor_index < 0:
+                continue
+            indices_by_version.setdefault(parsed_version_id, set()).add(neighbor_index)
+    return indices_by_version
+
+
 def payload_from_db(
     chunk: DocumentChunk,
     version: DocumentVersion,
@@ -292,6 +320,67 @@ async def keep_active_points(
         for point in points
         if point.chunk_id in active_payloads
     ]
+
+
+async def expand_candidates_with_neighbors(
+    session: AsyncSession,
+    candidates: list[FusedCandidate],
+) -> tuple[list[FusedCandidate], dict[str, Any]]:
+    if not candidates:
+        return [], {
+            "seed_candidates": 0,
+            "added_neighbors": 0,
+            "window": EXPANSION_WINDOW,
+        }
+
+    existing_chunk_ids = {candidate.chunk_id for candidate in candidates}
+    neighbor_indices = neighbor_indices_for_candidate_payloads(candidates)
+    if not neighbor_indices:
+        return candidates, {
+            "seed_candidates": min(len(candidates), EXPANSION_SEED_LIMIT),
+            "added_neighbors": 0,
+            "window": EXPANSION_WINDOW,
+        }
+
+    conditions = []
+    for version_id, indices in neighbor_indices.items():
+        conditions.append(
+            (DocumentChunk.document_version_id == version_id)
+            & (DocumentChunk.chunk_index.in_(indices))
+        )
+
+    statement = (
+        select(DocumentChunk, DocumentVersion, Document)
+        .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
+        .join(Document, DocumentVersion.document_id == Document.id)
+        .where(DocumentVersion.status == "active")
+        .where(or_(*conditions))
+    )
+
+    rows = (await session.execute(statement)).all()
+    expanded = list(candidates)
+    added = 0
+    for chunk, version, document in rows:
+        chunk_id = str(chunk.id)
+        if chunk_id in existing_chunk_ids:
+            continue
+        existing_chunk_ids.add(chunk_id)
+        expanded.append(
+            FusedCandidate(
+                chunk_id=chunk_id,
+                payload=payload_from_db(chunk, version, document),
+                fused_score=0.0,
+                channels={"expanded"},
+            )
+        )
+        added += 1
+
+    return expanded, {
+        "seed_candidates": min(len(candidates), EXPANSION_SEED_LIMIT),
+        "added_neighbors": added,
+        "window": EXPANSION_WINDOW,
+        "candidate_count_after_expansion": len(expanded),
+    }
 
 
 async def query_dense(
@@ -585,14 +674,27 @@ async def search_documents(
     )
 
     started_at = time.perf_counter()
+    ranked, expansion_details = await expand_candidates_with_neighbors(session, fused)
+    stages.append(
+        RetrievalStage(
+            sequence=5,
+            stage="candidate expansion",
+            status="completed",
+            message="Added neighboring chunks around fused candidates before reranking.",
+            duration_ms=elapsed_ms(started_at),
+            details=expansion_details,
+        )
+    )
+
+    started_at = time.perf_counter()
     reranker_status = "completed"
     reranker_message = "Reranked fused candidates with the local MiniLM cross-encoder."
     try:
-        ranked = await rerank_candidates(query, fused, settings)
+        ranked = await rerank_candidates(query, ranked, settings)
         ranked = apply_query_analysis_adjustments(ranked, analysis)
         reranker_details = {
             "model": settings.reranker_model,
-            "candidate_count": len(fused),
+            "candidate_count": len(ranked),
             "reranked_count": len(ranked),
             "best_score": ranked[0].rerank_score if ranked else None,
             "query_match_adjustments": [
@@ -616,7 +718,7 @@ async def search_documents(
         }
     stages.append(
         RetrievalStage(
-            sequence=5,
+            sequence=6,
             stage="rerank",
             status=reranker_status,
             message=reranker_message,
@@ -627,7 +729,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=6,
+            sequence=7,
             stage="context packing",
             status="completed",
             message="Packed selected evidence into the context that Qwen will receive next.",
@@ -653,7 +755,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=7,
+            sequence=8,
             stage="answer generation",
             status="completed",
             message="Generated a grounded answer from packed evidence with Qwen.",
@@ -694,7 +796,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=8,
+            sequence=9,
             stage="evidence preview",
             status="completed",
             message="Returned answer, top evidence chunks, and packed context.",

@@ -1,5 +1,9 @@
+import uuid
+
 from app.retrieval import (
+    FusedCandidate,
     RetrievedPoint,
+    neighbor_indices_for_candidate_payloads,
     parse_retrieved_points,
     reciprocal_rank_fuse,
     score_to_text,
@@ -60,3 +64,28 @@ def test_reciprocal_rank_fuse_combines_dense_and_sparse_matches() -> None:
 def test_score_to_text_preserves_none_and_numeric_values() -> None:
     assert score_to_text(None) is None
     assert score_to_text(-3.4557268619537354) == "-3.4557268619537354"
+
+
+def test_neighbor_indices_for_candidate_payloads_uses_same_version_window() -> None:
+    candidates = [
+        FusedCandidate(
+            chunk_id="chunk-1",
+            payload={
+                "document_version_id": "00000000-0000-0000-0000-000000000001",
+                "chunk_index": 10,
+            },
+        ),
+        FusedCandidate(
+            chunk_id="chunk-2",
+            payload={
+                "document_version_id": "00000000-0000-0000-0000-000000000001",
+                "chunk_index": 0,
+            },
+        ),
+    ]
+
+    indices = neighbor_indices_for_candidate_payloads(candidates)
+
+    assert indices == {
+        uuid.UUID("00000000-0000-0000-0000-000000000001"): {9, 11, 1}
+    }
