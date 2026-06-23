@@ -1,0 +1,21 @@
+.env
+.runtime/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+
+# Node
+node_modules/
+.next/
+coverage/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+
