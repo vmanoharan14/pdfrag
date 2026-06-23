@@ -56,3 +56,23 @@ Health endpoints:
 - Liveness: `http://127.0.0.1:18000/api/health/live`
 - Dependency readiness: `http://127.0.0.1:18000/api/health/ready`
 - OpenAPI: `http://127.0.0.1:18000/docs`
+
+## Frontend
+
+Install frontend dependencies:
+
+```bash
+./scripts/setup_frontend.sh
+```
+
+Start the Next.js development server:
+
+```bash
+./scripts/start_frontend.sh
+```
+
+Open:
+
+- Overview: `http://127.0.0.1:13000`
+- Chat preview: `http://127.0.0.1:13000/chat`
+- Trace preview: `http://127.0.0.1:13000/traces/demo`

@@ -1,0 +1,27 @@
+{
+  "name": "pdfrag-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 13000",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 13000",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "next": "16.2.9",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.9",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.2",
+    "eslint-config-next": "16.2.9",
+    "typescript": "5.9.3"
+  },
+  "overrides": {
+    "postcss": "8.5.15"
+  }
+}
