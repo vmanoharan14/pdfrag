@@ -653,6 +653,18 @@ textarea {
   margin: 12px 0;
 }
 
+.score-row a {
+  background: #e5f7ee;
+  border: 1px solid #bce4cf;
+  border-radius: 999px;
+  color: #08764a;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 6px 9px;
+  text-transform: uppercase;
+}
+
 .result-text {
   background: #f7faf8;
   border-radius: 12px;
@@ -964,6 +976,18 @@ textarea {
   width: 23px;
 }
 
+.warning-mark {
+  align-items: center;
+  background: #fff6dc;
+  border-radius: 50%;
+  color: #815d00;
+  display: flex;
+  font-size: 10px;
+  height: 23px;
+  justify-content: center;
+  width: 23px;
+}
+
 .stage-meta time {
   color: #68756e;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -978,6 +1002,10 @@ textarea {
   line-height: 1.6;
   margin: 18px 2px 0;
   text-align: center;
+}
+
+.trace-detail-grid {
+  margin-top: 34px;
 }
 
 .documents-page {

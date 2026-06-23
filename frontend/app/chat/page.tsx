@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Link from "next/link";
 
 type RetrievalStage = {
   sequence: number;
@@ -31,6 +32,7 @@ type RetrievalResult = {
 };
 
 type RetrievalResponse = {
+  trace_id: string;
   query: string;
   mode: string;
   query_analysis: QueryAnalysis;
@@ -235,6 +237,7 @@ export default function ChatPage() {
             </div>
             <p>{response.answer.text}</p>
             <div className="score-row">
+              <Link href={`/traces/${response.trace_id}`}>open stored trace</Link>
               <span>
                 citations{" "}
                 {response.answer.citation_ids.length
