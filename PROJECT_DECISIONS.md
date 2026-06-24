@@ -308,6 +308,9 @@ Live golden checks:
 ```bash
 .runtime/venv/bin/python scripts/run_golden_queries.py --generation-model gemma2:2b
 .runtime/venv/bin/python scripts/run_golden_queries.py --generation-model qwen3.5:9b --case enrollment
+.runtime/venv/bin/python scripts/run_golden_queries.py \
+  --generation-model gemma2:2b \
+  --json-output .runtime/evals/golden-gemma.json
 ```
 
 The golden script requires the local backend, indexed documents, Qdrant, Ollama,

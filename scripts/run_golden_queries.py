@@ -8,6 +8,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 
@@ -20,6 +22,21 @@ class GoldenCase:
     expected_any_topics: tuple[str, ...] = ()
     require_not_enough_evidence: bool = False
     max_table_of_contents_selected: int = 0
+
+
+@dataclass(frozen=True)
+class GoldenResult:
+    case_name: str
+    query: str
+    passed: bool
+    failures: list[str]
+    trace_id: str
+    generation_model: str
+    elapsed_ms: int
+    answer_generation_ms: int | None
+    citation_ids: list[str]
+    selected_sections: list[str]
+    topics: list[str]
 
 
 GOLDEN_CASES: tuple[GoldenCase, ...] = (
@@ -107,6 +124,25 @@ def query_topics(response: dict[str, Any]) -> list[str]:
     return [str(topic) for topic in topics] if isinstance(topics, list) else []
 
 
+def citation_ids(response: dict[str, Any]) -> list[str]:
+    answer = response.get("answer", {})
+    citations = answer.get("citation_ids", []) if isinstance(answer, dict) else []
+    return [str(citation) for citation in citations] if isinstance(citations, list) else []
+
+
+def stage_duration_ms(response: dict[str, Any], stage_name: str) -> int | None:
+    stages = response.get("stages", [])
+    if not isinstance(stages, list):
+        return None
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        if stage.get("stage") == stage_name:
+            duration = stage.get("duration_ms")
+            return int(duration) if isinstance(duration, int | float) else None
+    return None
+
+
 def validate_case(case: GoldenCase, response: dict[str, Any]) -> list[str]:
     failures: list[str] = []
     stages = stage_names(response)
@@ -172,7 +208,7 @@ def run_case(
     backend_url: str,
     generation_model: str,
     timeout_seconds: float,
-) -> bool:
+) -> GoldenResult:
     started_at = time.perf_counter()
     response = post_json(
         f"{backend_url.rstrip('/')}/api/chat",
@@ -181,17 +217,65 @@ def run_case(
     )
     elapsed_ms = int((time.perf_counter() - started_at) * 1000)
     failures = validate_case(case, response)
-    trace_id = response.get("trace_id", "unknown")
+    trace_id = str(response.get("trace_id", "unknown"))
     model = answer_model(response)
+    result = GoldenResult(
+        case_name=case.name,
+        query=case.query,
+        passed=not failures,
+        failures=failures,
+        trace_id=trace_id,
+        generation_model=model,
+        elapsed_ms=elapsed_ms,
+        answer_generation_ms=stage_duration_ms(response, "answer generation"),
+        citation_ids=citation_ids(response),
+        selected_sections=selected_sections(response),
+        topics=query_topics(response),
+    )
 
     if failures:
         print(f"FAIL {case.name} trace={trace_id} model={model} elapsed_ms={elapsed_ms}")
         for failure in failures:
             print(f"  - {failure}")
-        return False
+        return result
 
     print(f"PASS {case.name} trace={trace_id} model={model} elapsed_ms={elapsed_ms}")
-    return True
+    return result
+
+
+def result_to_json(result: GoldenResult) -> dict[str, Any]:
+    return {
+        "case_name": result.case_name,
+        "query": result.query,
+        "passed": result.passed,
+        "failures": result.failures,
+        "trace_id": result.trace_id,
+        "generation_model": result.generation_model,
+        "elapsed_ms": result.elapsed_ms,
+        "answer_generation_ms": result.answer_generation_ms,
+        "citation_ids": result.citation_ids,
+        "selected_sections": result.selected_sections,
+        "topics": result.topics,
+    }
+
+
+def write_json_report(
+    path: Path,
+    *,
+    backend_url: str,
+    generation_model: str,
+    results: list[GoldenResult],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "created_at": datetime.now(UTC).isoformat(),
+        "backend_url": backend_url,
+        "generation_model_requested": generation_model,
+        "passed": sum(1 for result in results if result.passed),
+        "total": len(results),
+        "results": [result_to_json(result) for result in results],
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def main() -> int:
@@ -206,9 +290,15 @@ def main() -> int:
         help="Run only one golden case by name.",
     )
     parser.add_argument("--timeout-seconds", type=float, default=90)
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        help="Optional path to write a structured JSON report.",
+    )
     args = parser.parse_args()
 
     passed = 0
+    results: list[GoldenResult] = []
     cases = (
         tuple(case for case in GOLDEN_CASES if case.name == args.case)
         if args.case
@@ -216,12 +306,14 @@ def main() -> int:
     )
     try:
         for case in cases:
-            if run_case(
+            result = run_case(
                 case,
                 backend_url=args.backend_url,
                 generation_model=args.generation_model,
                 timeout_seconds=args.timeout_seconds,
-            ):
+            )
+            results.append(result)
+            if result.passed:
                 passed += 1
     except urllib.error.URLError as exc:
         print(f"ERROR could not call backend: {exc}", file=sys.stderr)
@@ -229,6 +321,14 @@ def main() -> int:
 
     total = len(cases)
     print(f"\n{passed}/{total} golden checks passed")
+    if args.json_output:
+        write_json_report(
+            args.json_output,
+            backend_url=args.backend_url,
+            generation_model=args.generation_model,
+            results=results,
+        )
+        print(f"wrote JSON report: {args.json_output}")
     return 0 if passed == total else 1
 
 
