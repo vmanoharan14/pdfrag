@@ -4,6 +4,7 @@ from app.generation import (
     build_answer_prompt,
     build_system_prompt,
     extract_citation_ids,
+    generate_answer,
 )
 
 
@@ -53,3 +54,24 @@ def test_answer_is_cited_accepts_safe_fallback() -> None:
     assert answer_is_cited("Not enough evidence.")
     assert answer_is_cited("Complete the form. [E1]")
     assert not answer_is_cited("Complete the form.")
+
+
+async def test_generate_answer_uses_requested_model_for_empty_context() -> None:
+    context = PackedContext(
+        blocks=[],
+        prompt_context="",
+        char_count=0,
+        token_estimate=0,
+        max_chars=6000,
+        truncated=False,
+    )
+
+    result = await generate_answer(
+        "unknown question",
+        context,
+        settings=None,  # type: ignore[arg-type]
+        generation_model="gemma2:2b",
+    )
+
+    assert result.model == "gemma2:2b"
+    assert result.answer == "Not enough evidence."

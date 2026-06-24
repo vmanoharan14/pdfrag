@@ -64,11 +64,13 @@ async def generate_answer(
     query: str,
     context: PackedContext,
     settings: Settings,
+    generation_model: str | None = None,
 ) -> GenerationResult:
+    selected_model = generation_model or settings.generation_model
     if not context.prompt_context.strip():
         return GenerationResult(
             answer="Not enough evidence.",
-            model=settings.generation_model,
+            model=selected_model,
             prompt=build_answer_prompt(query, context),
             citation_ids=[],
             prompt_chars=0,
@@ -80,7 +82,7 @@ async def generate_answer(
         response = await client.post(
             f"{settings.ollama_base_url}/api/chat",
             json={
-                "model": settings.generation_model,
+                "model": selected_model,
                 "messages": [
                     {
                         "role": "system",
@@ -111,7 +113,7 @@ async def generate_answer(
 
     return GenerationResult(
         answer=answer,
-        model=settings.generation_model,
+        model=selected_model,
         prompt=prompt,
         citation_ids=extract_citation_ids(answer),
         prompt_chars=len(prompt),

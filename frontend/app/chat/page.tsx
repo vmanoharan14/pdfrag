@@ -43,6 +43,7 @@ type RetrievalResponse = {
 };
 
 type FeedbackLabel = "correct" | "incomplete" | "wrong";
+type GenerationModel = "qwen3.5:9b" | "gemma2:2b";
 
 type QueryAnalysis = {
   original_query: string;
@@ -107,6 +108,8 @@ export default function ChatPage() {
   const [response, setResponse] = useState<RetrievalResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generationModel, setGenerationModel] =
+    useState<GenerationModel>("qwen3.5:9b");
   const [feedbackByChunk, setFeedbackByChunk] = useState<Record<string, FeedbackLabel>>({});
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [activeCitation, setActiveCitation] = useState<string | null>(null);
@@ -125,7 +128,7 @@ export default function ChatPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ query: trimmed }),
+        body: JSON.stringify({ query: trimmed, generation_model: generationModel }),
       });
       const payload = await apiResponse.json();
       if (!apiResponse.ok) {
@@ -221,17 +224,31 @@ export default function ChatPage() {
             </p>
           </div>
 
-          <form className="question-box active" onSubmit={runRetrieval}>
-            <textarea
-              aria-label="Question"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Ask a question about your documents…"
-              rows={2}
-            />
-            <button disabled={loading || !query.trim()} aria-label="Run retrieval">
-              {loading ? "…" : "↑"}
-            </button>
+          <form className="question-form" onSubmit={runRetrieval}>
+            <div className="question-box active">
+              <textarea
+                aria-label="Question"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Ask a question about your documents…"
+                rows={2}
+              />
+              <button disabled={loading || !query.trim()} aria-label="Run retrieval">
+                {loading ? "…" : "↑"}
+              </button>
+            </div>
+            <label className="model-selector">
+              <span>Answer model</span>
+              <select
+                value={generationModel}
+                onChange={(event) =>
+                  setGenerationModel(event.target.value as GenerationModel)
+                }
+              >
+                <option value="qwen3.5:9b">qwen3.5:9b · default quality</option>
+                <option value="gemma2:2b">gemma2:2b · fast local test</option>
+              </select>
+            </label>
           </form>
 
           {error ? <p className="form-error">{error}</p> : null}

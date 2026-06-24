@@ -424,6 +424,12 @@ textarea {
   background: rgba(255, 255, 255, 0.98);
 }
 
+.question-form {
+  align-self: center;
+  display: grid;
+  gap: 10px;
+}
+
 .question-box textarea {
   background: transparent;
   border: 0;
@@ -446,6 +452,32 @@ textarea {
   background: #cfdcd6;
   color: #7b8d85;
   cursor: not-allowed;
+}
+
+.model-selector {
+  align-items: center;
+  color: #d5e5df;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.model-selector span {
+  color: #74d7b2;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.model-selector select {
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #d7e2dc;
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 12px;
+  min-height: 34px;
+  padding: 0 12px;
 }
 
 .trace-results-grid {

@@ -35,7 +35,33 @@ project can be resumed without relying on chat memory.
 | `Qdrant/bm25` / local BM25 sparse encoder | Sparse lexical retrieval | Active |
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Reranking | Active |
 | `qwen3.5:9b` | Grounded answer generation | Active |
-| `gemma2:2b` | Optional query router | Installed/available, but disabled by default locally |
+| `gemma2:2b` | Optional query router and fast answer-generation test model | Installed/available; router disabled by default locally; selectable for answer A/B tests |
+
+## Generation Model Decision
+
+Default answer generation remains `qwen3.5:9b` because quality and citation
+reliability matter more than raw speed.
+
+For local latency testing, the chat UI can request `gemma2:2b` per query.
+This is an A/B testing path, not a permanent replacement decision.
+
+Expected tradeoff:
+
+- `qwen3.5:9b`: slower, stronger answer quality.
+- `gemma2:2b`: faster, likely weaker grounding/citation reliability.
+
+Evaluate both on the same questions before changing the default.
+
+Observed first local A/B check for `how to enroll`:
+
+| Model | Answer generation latency | Citation behavior | Initial finding |
+|---|---:|---|---|
+| `gemma2:2b` | about 7.5 seconds | returned `E1`, `E3`, `E4` | faster, but skipped one useful eligibility citation |
+| `qwen3.5:9b` | about 33.1 seconds in this run | returned `E1`, `E2`, `E3`, `E4` | slower, more complete evidence coverage |
+
+This is one local run, not enough for a permanent model decision. Model swapping
+and Ollama load state may affect latency. Continue comparing on the golden
+question set before changing the default.
 
 ## Router Decision
 

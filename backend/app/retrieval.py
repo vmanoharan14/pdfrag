@@ -1,7 +1,7 @@
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,6 +50,7 @@ LOCAL_PRINCIPAL_ID = "local-development-principal"
 
 class RetrievalRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
+    generation_model: Literal["qwen3.5:9b", "gemma2:2b"] | None = None
 
 
 class RetrievalStage(BaseModel):
@@ -929,7 +930,12 @@ async def search_documents(
     generation_status = "completed"
     generation_message = "Generated a grounded answer from packed evidence with Qwen."
     try:
-        generated_answer = await generate_answer(query, packed_context, settings)
+        generated_answer = await generate_answer(
+            query,
+            packed_context,
+            settings,
+            generation_model=request.generation_model,
+        )
         generation_details = {
             "model": generated_answer.model,
             "prompt_chars": generated_answer.prompt_chars,
