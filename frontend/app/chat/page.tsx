@@ -91,12 +91,14 @@ type StreamedContext = {
 };
 
 type StreamDone = {
-  trace_id: string;
+  trace_id: string | null;
   answer: string;
   citation_ids: string[];
   generation_model: string;
   retrieval_mode: string;
   results: RetrievalResult[];
+  from_cache: boolean;
+  cached_at: string | null;
 };
 
 const backendUrl =
@@ -188,6 +190,18 @@ export default function ChatPage() {
   const [liveStages, setLiveStages] = useState<RetrievalStage[]>([]);
   const [liveContext, setLiveContext] = useState<StreamedContext | null>(null);
   const [streamDone, setStreamDone] = useState<StreamDone | null>(null);
+
+  // Cache state
+  const [cacheClearing, setCacheClearing] = useState(false);
+
+  async function clearCache() {
+    setCacheClearing(true);
+    try {
+      await fetch(`${backendUrl}/api/cache`, { method: "DELETE" });
+    } finally {
+      setCacheClearing(false);
+    }
+  }
 
   async function runRetrieval(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -350,18 +364,29 @@ export default function ChatPage() {
                 {loading ? "…" : "↑"}
               </button>
             </div>
-            <label className="model-selector">
-              <span>Answer model</span>
-              <select
-                value={generationModel}
-                onChange={(event) =>
-                  setGenerationModel(event.target.value as GenerationModel)
-                }
+            <div className="form-row">
+              <label className="model-selector">
+                <span>Answer model</span>
+                <select
+                  value={generationModel}
+                  onChange={(event) =>
+                    setGenerationModel(event.target.value as GenerationModel)
+                  }
+                >
+                  <option value="gemma2:2b">gemma2:2b · default fast local</option>
+                  <option value="qwen3.5:9b">qwen3.5:9b · quality check</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="clear-cache-button"
+                onClick={() => void clearCache()}
+                disabled={cacheClearing}
+                title="Clear all cached responses"
               >
-                <option value="gemma2:2b">gemma2:2b · default fast local</option>
-                <option value="qwen3.5:9b">qwen3.5:9b · quality check</option>
-              </select>
-            </label>
+                {cacheClearing ? "Clearing…" : "Clear cache"}
+              </button>
+            </div>
           </form>
 
           {error ? <p className="form-error">{error}</p> : null}
@@ -373,19 +398,30 @@ export default function ChatPage() {
               <div className="section-heading">
                 <div>
                   <p className="eyebrow">Answer</p>
-                  <h2>Generated from packed evidence</h2>
+                  <h2>
+                    {streamDone?.from_cache ? "Served from cache" : "Generated from packed evidence"}
+                  </h2>
                 </div>
-                <small>{streamDone?.generation_model ?? response?.answer.model ?? generationModel}</small>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {streamDone?.from_cache ? (
+                    <span className="cache-hit-badge" title={`Cached at ${streamDone.cached_at ?? ""}`}>
+                      cached
+                    </span>
+                  ) : null}
+                  <small>{streamDone?.generation_model ?? response?.answer.model ?? generationModel}</small>
+                </div>
               </div>
               <p>
                 {streamDone?.answer ?? streamText ?? response?.answer.text ?? ""}
                 {loading && !streamDone ? <span className="stream-cursor" /> : null}
               </p>
               <div className="score-row">
-                {streamDone ? (
+                {streamDone?.trace_id ? (
                   <Link href={`/traces/${streamDone.trace_id}`}>open stored trace</Link>
-                ) : response ? (
+                ) : !streamDone && response ? (
                   <Link href={`/traces/${response.trace_id}`}>open stored trace</Link>
+                ) : streamDone?.from_cache ? (
+                  <span className="cache-note">trace not stored for cached responses</span>
                 ) : null}
                 {(streamDone?.citation_ids ?? response?.answer.citation_ids ?? []).length ? (
                   <div className="citation-chips" aria-label="Answer citations">
@@ -492,13 +528,37 @@ export default function ChatPage() {
                 <p className="eyebrow">Evidence</p>
                 <h2>Top chunks</h2>
               </div>
-              {(streamDone?.results ?? response?.results) ? (
+              {streamDone?.from_cache && liveContext ? (
+                <small>{liveContext.blocks.length} block(s) · from cache</small>
+              ) : (streamDone?.results ?? response?.results) ? (
                 <small>{(streamDone?.results ?? response?.results)!.length} result(s)</small>
               ) : null}
             </div>
             {feedbackError ? <p className="form-error">{feedbackError}</p> : null}
 
-            {(streamDone?.results ?? response?.results ?? []).length ? (
+            {streamDone?.from_cache && liveContext?.blocks.length ? (
+              <div className="cache-evidence-note">
+                <p>Scores not available — response served from cache. Evidence blocks used:</p>
+                <div className="retrieval-results">
+                  {liveContext.blocks.map((block, index) => (
+                    <article className="retrieval-result" key={block.citation_id}>
+                      <div className="result-head">
+                        <span>#{index + 1}</span>
+                        <div>
+                          <h3>{block.source_filename ?? "Unknown source"}</h3>
+                          <p>
+                            Chunk {block.chunk_index ?? "—"}
+                            {block.section_title ? ` · ${block.section_title}` : ""}
+                            {block.page_number ? ` · page ${block.page_number}` : ""}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="result-text">{shortText(block.text)}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : (streamDone?.results ?? response?.results ?? []).length ? (
               <div className="retrieval-results">
                 {(streamDone?.results ?? response?.results ?? []).map((result, index) => (
                   <article className="retrieval-result" key={result.chunk_id}>
@@ -579,6 +639,7 @@ export default function ChatPage() {
                 Evidence chunks will appear here after a query.
               </p>
             )}
+
 
             {(liveContext ?? response?.packed_context) ? (() => {
               const ctx = liveContext ?? response?.packed_context;

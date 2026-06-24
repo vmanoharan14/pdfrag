@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.cache import router as cache_router
 from app.chat import router as chat_router
 from app.config import get_settings
 from app.documents import router as documents_router
@@ -26,11 +27,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:13000"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 app.include_router(documents_router)
 app.include_router(chat_router)
+app.include_router(cache_router)
 app.include_router(retrieval_router)
 app.include_router(traces_router)
 

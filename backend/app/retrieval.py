@@ -24,6 +24,7 @@ from app.models import (
     EvidenceFeedback,
     RagTrace,
     RagTraceStep,
+    ResponseCache,
 )
 from app.query_analysis import (
     QueryAnalysis,
@@ -245,31 +246,54 @@ def response_cache_scope(
     }
 
 
-def response_cache_stage(
-    sequence: int,
+def _cache_key(scope: dict[str, Any]) -> str:
+    material = json.dumps(
+        {k: v for k, v in scope.items() if k != "cache_key_preview"},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(material.encode()).hexdigest()[:64]
+
+
+async def read_response_cache(
+    session: AsyncSession,
     *,
     query: str,
     settings: Settings,
     generation_model: str,
-    duration_ms: int = 0,
-) -> RetrievalStage:
-    return RetrievalStage(
-        sequence=sequence,
-        stage="response cache",
-        status="skipped",
-        message="Response cache is scoped but disabled until cache safety is validated.",
-        duration_ms=duration_ms,
-        details={
-            "cache_enabled": False,
-            "cache_event": "miss",
-            "reason": "cache read/write disabled during local validation",
-            **response_cache_scope(
-                query=query,
-                settings=settings,
-                generation_model=generation_model,
-            ),
-        },
+) -> tuple[ResponseCache | None, str]:
+    scope = response_cache_scope(query=query, settings=settings, generation_model=generation_model)
+    key = _cache_key(scope)
+    row = await session.get(ResponseCache, key)
+    if row is not None:
+        row.hit_count += 1
+        await session.commit()
+    return row, key
+
+
+async def write_response_cache(
+    session: AsyncSession,
+    *,
+    cache_key: str,
+    query: str,
+    answer: str,
+    citation_ids: list[str],
+    retrieval_mode: str,
+    generation_model: str,
+    context_snapshot: dict[str, Any],
+) -> None:
+    row = ResponseCache(
+        cache_key=cache_key,
+        tenant_id=LOCAL_TENANT_ID,
+        query=query,
+        answer=answer,
+        citation_ids=citation_ids,
+        retrieval_mode=retrieval_mode,
+        generation_model=generation_model,
+        context_snapshot=context_snapshot,
     )
+    await session.merge(row)
+    await session.commit()
 
 
 def extract_points(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -886,12 +910,14 @@ async def run_pipeline_to_context(
     await emit(local_security_context_stage(sequence=2, duration_ms=elapsed_ms(started_at)))
 
     started_at = time.perf_counter()
-    await emit(response_cache_stage(
+    scope = response_cache_scope(query=query, settings=settings, generation_model=generation_model)
+    await emit(RetrievalStage(
         sequence=3,
-        query=query,
-        settings=settings,
-        generation_model=generation_model,
+        stage="response cache",
+        status="skipped",
+        message="Cache miss — running full retrieval pipeline.",
         duration_ms=elapsed_ms(started_at),
+        details={"cache_enabled": True, "cache_event": "miss", **scope},
     ))
 
     started_at = time.perf_counter()
@@ -1090,15 +1116,15 @@ async def search_documents(
     stages.append(local_security_context_stage(sequence=2, duration_ms=elapsed_ms(started_at)))
 
     started_at = time.perf_counter()
-    stages.append(
-        response_cache_stage(
-            sequence=3,
-            query=query,
-            settings=settings,
-            generation_model=generation_model,
-            duration_ms=elapsed_ms(started_at),
-        )
-    )
+    _scope = response_cache_scope(query=query, settings=settings, generation_model=generation_model)
+    stages.append(RetrievalStage(
+        sequence=3,
+        stage="response cache",
+        status="skipped",
+        message="Cache miss — running full retrieval pipeline.",
+        duration_ms=elapsed_ms(started_at),
+        details={"cache_enabled": True, "cache_event": "miss", **_scope},
+    ))
 
     started_at = time.perf_counter()
     router_decision = await route_query(query, analysis, settings)

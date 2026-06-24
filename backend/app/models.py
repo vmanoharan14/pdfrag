@@ -336,3 +336,22 @@ class RagTraceStep(Base):
     )
 
     trace: Mapped[RagTrace] = relationship(back_populates="steps")
+
+
+class ResponseCache(Base):
+    __tablename__ = "response_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    citation_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    retrieval_mode: Mapped[str] = mapped_column(String(100), nullable=False)
+    generation_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    context_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
