@@ -340,10 +340,13 @@ Live golden checks:
 .runtime/venv/bin/python scripts/run_golden_queries.py \
   --generation-model gemma2:2b \
   --json-output .runtime/evals/golden-gemma.json
+.runtime/venv/bin/python scripts/compare_generation_models.py \
+  --models qwen3.5:9b,gemma2:2b \
+  --json-output .runtime/evals/model-comparison.json
 ```
 
-The golden script requires the local backend, indexed documents, Qdrant, Ollama,
-and supporting services to be running.
+The golden and model-comparison scripts require the local backend, indexed
+documents, Qdrant, Ollama, and supporting services to be running.
 
 Current golden cases:
 
@@ -360,19 +363,28 @@ Observed first run:
 - `gemma2:2b`: 7/7 golden checks passed.
 - `qwen3.5:9b`: 7/7 golden checks passed.
 
+Warmup-aware model comparison:
+
+- Implemented in `scripts/compare_generation_models.py`.
+- Warmup pass(es) are tracked separately from measured pass(es).
+- Small validation with `gemma2:2b` on `specialist_visit_copay` showed:
+  - warmup elapsed: 9612 ms
+  - measured elapsed: 2458 ms
+  - measured answer generation: 374 ms
+- Decision: do not compare generation models using first-run latency alone.
+
 ## Pending Slices in Recommended Order
 
-1. Add warmup-aware generation model latency comparison.
-2. Decide whether to optimize generation defaults.
-3. Add optional offline RAGAS adapter.
-4. Add SSE streaming for answer text and live trace events.
-5. Add conversation support with provenance-safe summaries.
-6. Improve ingestion quality metrics: parser coverage, table/form/OCR
+1. Decide whether to optimize generation defaults.
+2. Add optional offline RAGAS adapter.
+3. Add SSE streaming for answer text and live trace events.
+4. Add conversation support with provenance-safe summaries.
+5. Improve ingestion quality metrics: parser coverage, table/form/OCR
     indicators.
-7. Add table/form-aware chunking and retrieval.
-8. Add DOCX/PPTX/XLSX/CSV/HTML support.
-9. Add admin trace list/search page.
-10. Add authentication and tenant isolation after local v1 is stable.
+6. Add table/form-aware chunking and retrieval.
+7. Add DOCX/PPTX/XLSX/CSV/HTML support.
+8. Add admin trace list/search page.
+9. Add authentication and tenant isolation after local v1 is stable.
 
 ## Open Questions
 

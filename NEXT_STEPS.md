@@ -177,10 +177,11 @@ git commit -m "feat: trace response cache scope"
 
 ### Evaluation / Golden Checks
 
-Script:
+Scripts:
 
 ```text
 scripts/run_golden_queries.py
+scripts/compare_generation_models.py
 ```
 
 Examples:
@@ -191,6 +192,9 @@ Examples:
 .runtime/venv/bin/python scripts/run_golden_queries.py \
   --generation-model gemma2:2b \
   --json-output .runtime/evals/golden-gemma.json
+.runtime/venv/bin/python scripts/compare_generation_models.py \
+  --models qwen3.5:9b,gemma2:2b \
+  --json-output .runtime/evals/model-comparison.json
 ```
 
 Current golden cases:
@@ -274,29 +278,26 @@ Why these were added:
   indexed evidence returned `Not enough evidence`; this needs either better
   query expansion or a more specific golden case.
 
-### 1. Add warmup-aware model latency comparison
+### Recently completed: Warmup-aware model latency comparison
 
 Reason:
 
 - Ollama model switching can make first-run timing misleading.
 - Need separate warm and cold measurements.
 
-Implementation idea:
-
-- Extend `scripts/run_golden_queries.py` or add a new script:
+Script:
 
 ```text
 scripts/compare_generation_models.py
 ```
 
-- Run each model twice:
-  - run 1 = warmup/load
-  - run 2 = measured
-- Compare:
-  - elapsed ms
-  - answer generation ms
-  - citation count
-  - golden pass/fail
+What it does:
+
+- Runs warmup pass(es) separately from measured pass(es).
+- Reuses the deterministic golden cases.
+- Reports measured pass count, average elapsed latency, p95 elapsed latency,
+  average answer-generation latency, and p95 answer-generation latency.
+- Can write a structured JSON report.
 
 Models:
 
@@ -311,7 +312,28 @@ Optional command to inspect loaded Ollama models:
 curl -sS http://127.0.0.1:11434/api/ps
 ```
 
-### 2. Decide whether to optimize generation
+Small validation run:
+
+```bash
+.runtime/venv/bin/python scripts/compare_generation_models.py \
+  --models gemma2:2b \
+  --case specialist_visit_copay \
+  --warmup-runs 1 \
+  --measured-runs 1
+```
+
+Observed result:
+
+```text
+warmup elapsed: 9612 ms
+measured elapsed: 2458 ms
+measured answer generation: 374 ms
+```
+
+This confirms that first-run latency can be misleading and should not be used
+alone when comparing generation models.
+
+### 1. Decide whether to optimize generation
 
 Possible options:
 
@@ -324,7 +346,7 @@ Possible options:
 
 Do not blindly switch default to Gemma until golden results compare quality.
 
-### 3. Add optional offline RAGAS adapter
+### 2. Add optional offline RAGAS adapter
 
 Only after deterministic golden checks are useful.
 
@@ -334,7 +356,7 @@ Rules:
 - Store evaluator model, prompt, metric version, raw rationale.
 - Treat LLM-evaluated scores as directional, not ground truth.
 
-### 4. Add SSE streaming for answer and live trace
+### 3. Add SSE streaming for answer and live trace
 
 Reason:
 
@@ -351,7 +373,7 @@ This is bigger than prior slices; split carefully:
 2. Frontend streaming render.
 3. Live trace event render.
 
-### 5. Conversation support with provenance-safe summaries
+### 4. Conversation support with provenance-safe summaries
 
 Rules:
 
@@ -359,7 +381,7 @@ Rules:
 - Summary can help with user context, but answer still needs retrieved evidence.
 - Store conversation id and summary provenance.
 
-### 6. Ingestion quality metrics
+### 5. Ingestion quality metrics
 
 Add parser/chunking quality signals:
 
@@ -373,7 +395,7 @@ Add parser/chunking quality signals:
 
 Show these in document/ingestion UI.
 
-### 7. Table/form-aware retrieval
+### 6. Table/form-aware retrieval
 
 Later after text RAG stabilizes:
 
@@ -383,7 +405,7 @@ Later after text RAG stabilizes:
 - table summaries
 - row-level expansion
 
-### 8. More document formats
+### 7. More document formats
 
 After PDF/text/Markdown path is stable:
 
@@ -394,7 +416,7 @@ After PDF/text/Markdown path is stable:
 - PPTX
 - scanned PDFs/OCR
 
-### 9. Admin trace list/search page
+### 8. Admin trace list/search page
 
 Add:
 
@@ -405,7 +427,7 @@ Add:
 - filter by question text
 - open trace detail
 
-### 10. Authentication and tenant isolation
+### 9. Authentication and tenant isolation
 
 Defer until local v1 is stable.
 
