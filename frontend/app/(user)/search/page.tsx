@@ -271,9 +271,6 @@ export default function SearchPage() {
             <div className="search-answer">
               <div className="search-answer-header">
                 <span className="search-answer-label">Answer</span>
-                {streamDone?.from_cache && (
-                  <span className="search-cached-badge">from cache</span>
-                )}
               </div>
 
               <p className="search-answer-text">

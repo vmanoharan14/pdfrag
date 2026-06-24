@@ -28,6 +28,7 @@ type RetrievalResult = {
   dense_rank: number | null;
   sparse_rank: number | null;
   rerank_score: number | null;
+  feedback_adjustment: number;
   final_rank: number;
 };
 
@@ -577,6 +578,11 @@ export default function ChatPage() {
                     <div className="score-row">
                       <span>fused {formatScore(result.fused_score)}</span>
                       <span>rerank {formatScore(result.rerank_score)}</span>
+                      {result.feedback_adjustment !== 0 ? (
+                        <span className={result.feedback_adjustment > 0 ? "feedback-boost" : "feedback-penalty"}>
+                          feedback {result.feedback_adjustment > 0 ? "+" : ""}{result.feedback_adjustment.toFixed(2)}
+                        </span>
+                      ) : null}
                       <span>
                         dense rank {result.dense_rank ?? "—"} / score{" "}
                         {formatScore(result.dense_score)}

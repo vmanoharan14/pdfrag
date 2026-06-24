@@ -2,8 +2,8 @@ import hashlib
 import json
 import time
 import uuid
-from dataclasses import dataclass, field
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -83,6 +83,7 @@ class RetrievalResult(BaseModel):
     dense_rank: int | None = None
     sparse_rank: int | None = None
     rerank_score: float | None = None
+    feedback_adjustment: float = 0.0
     final_rank: int
 
 
@@ -188,6 +189,7 @@ class FusedCandidate:
     sparse_rank: int | None = None
     rerank_score: float | None = None
     query_match_score: float = 0.0
+    feedback_adjustment: float = 0.0
     channels: set[str] = field(default_factory=set)
 
 
@@ -616,6 +618,7 @@ def result_from_candidate(candidate: FusedCandidate) -> RetrievalResult:
         dense_rank=candidate.dense_rank,
         sparse_rank=candidate.sparse_rank,
         rerank_score=candidate.rerank_score,
+        feedback_adjustment=candidate.feedback_adjustment,
         final_rank=0,
     )
 
@@ -833,6 +836,66 @@ async def rerank_candidates(
     )
 
 
+FEEDBACK_DELTAS: dict[str, float] = {
+    "correct": 1.5,
+    "incomplete": 0.3,
+    "wrong": -2.0,
+}
+FEEDBACK_ADJUSTMENT_CAP = 4.0
+
+
+async def apply_feedback_adjustments(
+    candidates: list[FusedCandidate],
+    session: AsyncSession,
+    tenant_id: str,
+) -> tuple[list[FusedCandidate], int]:
+    """Adjust rerank scores using stored admin feedback votes.
+
+    correct → +1.5, incomplete → +0.3, wrong → −2.0 per vote, capped at ±4.0.
+    Returns (re-sorted candidates, count of chunks that had feedback applied).
+    """
+    if not candidates:
+        return candidates, 0
+
+    chunk_uuids = [uuid.UUID(c.chunk_id) for c in candidates]
+    rows = await session.execute(
+        select(EvidenceFeedback.chunk_id, EvidenceFeedback.label).where(
+            EvidenceFeedback.chunk_id.in_(chunk_uuids),
+            EvidenceFeedback.tenant_id == tenant_id,
+        )
+    )
+
+    raw: dict[str, float] = {}
+    for chunk_id, label in rows:
+        key = str(chunk_id)
+        raw[key] = raw.get(key, 0.0) + FEEDBACK_DELTAS.get(label, 0.0)
+
+    influenced = 0
+    for candidate in candidates:
+        delta = raw.get(candidate.chunk_id, 0.0)
+        if delta != 0.0:
+            adj = max(-FEEDBACK_ADJUSTMENT_CAP, min(FEEDBACK_ADJUSTMENT_CAP, delta))
+            candidate.feedback_adjustment = adj
+            if candidate.rerank_score is not None:
+                candidate.rerank_score += adj
+            influenced += 1
+
+    if influenced == 0:
+        return candidates, 0
+
+    return (
+        sorted(
+            candidates,
+            key=lambda c: (
+                c.rerank_score if c.rerank_score is not None else float("-inf"),
+                c.fused_score,
+            ),
+            reverse=True,
+        ),
+        influenced,
+    )
+
+
 def apply_query_analysis_adjustments(
     candidates: list[FusedCandidate],
     analysis: QueryAnalysis,
@@ -1015,12 +1078,16 @@ async def run_pipeline_to_context(
     reranker_message = "Reranked fused candidates with the local MiniLM cross-encoder."
     try:
         ranked = await rerank_candidates(query, ranked, settings)
+        ranked, feedback_influenced = await apply_feedback_adjustments(
+            ranked, session, LOCAL_TENANT_ID
+        )
         ranked = apply_query_analysis_adjustments(ranked, analysis)
-        reranker_details = {
+        reranker_details: dict[str, Any] = {
             "model": settings.reranker_model,
             "candidate_count": len(ranked),
             "reranked_count": len(ranked),
             "best_score": ranked[0].rerank_score if ranked else None,
+            "feedback_influenced_count": feedback_influenced,
             "query_match_adjustments": [
                 {
                     "chunk_id": candidate.chunk_id,
@@ -1029,6 +1096,15 @@ async def run_pipeline_to_context(
                 }
                 for candidate in ranked
                 if candidate.query_match_score
+            ],
+            "feedback_adjustments": [
+                {
+                    "chunk_id": candidate.chunk_id,
+                    "adjustment": candidate.feedback_adjustment,
+                    "section_title": candidate.payload.get("section_title"),
+                }
+                for candidate in ranked
+                if candidate.feedback_adjustment != 0.0
             ],
         }
     except Exception as exc:
@@ -1233,12 +1309,16 @@ async def search_documents(
     reranker_message = "Reranked fused candidates with the local MiniLM cross-encoder."
     try:
         ranked = await rerank_candidates(query, ranked, settings)
+        ranked, feedback_influenced = await apply_feedback_adjustments(
+            ranked, session, LOCAL_TENANT_ID
+        )
         ranked = apply_query_analysis_adjustments(ranked, analysis)
-        reranker_details = {
+        reranker_details: dict[str, Any] = {
             "model": settings.reranker_model,
             "candidate_count": len(ranked),
             "reranked_count": len(ranked),
             "best_score": ranked[0].rerank_score if ranked else None,
+            "feedback_influenced_count": feedback_influenced,
             "query_match_adjustments": [
                 {
                     "chunk_id": candidate.chunk_id,
@@ -1247,6 +1327,15 @@ async def search_documents(
                 }
                 for candidate in ranked
                 if candidate.query_match_score
+            ],
+            "feedback_adjustments": [
+                {
+                    "chunk_id": candidate.chunk_id,
+                    "adjustment": candidate.feedback_adjustment,
+                    "section_title": candidate.payload.get("section_title"),
+                }
+                for candidate in ranked
+                if candidate.feedback_adjustment != 0.0
             ],
         }
     except Exception as exc:

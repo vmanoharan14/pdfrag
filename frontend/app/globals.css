@@ -504,6 +504,26 @@ textarea {
   font-style: italic;
 }
 
+.feedback-boost,
+.feedback-penalty {
+  border-radius: 999px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  padding: 6px 9px;
+}
+
+.feedback-boost {
+  background: #e5f7ee;
+  border: 1px solid #bce4cf;
+  color: #08764a;
+}
+
+.feedback-penalty {
+  background: #fff0f0;
+  border: 1px solid #ffd1d1;
+  color: #9c2f2f;
+}
+
 .cache-evidence-note > p {
   color: #9ca3af;
   font-size: 12px;
