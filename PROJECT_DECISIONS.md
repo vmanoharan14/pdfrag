@@ -33,40 +33,13 @@ project can be resumed without relying on chat memory.
 |---|---|---|
 | `nomic-embed-text` | Dense embeddings | Active |
 | `Qdrant/bm25` / local BM25 sparse encoder | Sparse lexical retrieval | Active |
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` | Reranking | Active |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | Reranking | Active, batch=32, threads=4, max_length=512 |
 | `gemma2:2b` | Default local answer generation | Active default for local v1 |
-| `qwen3.5:9b` | Quality-check answer generation | Installed/available; selectable for answer A/B tests |
+| `qwen3.5:9b` | Quality-check answer generation | Installed/available; selectable |
 
 ## Generation Model Decision
 
 Default local answer generation is `gemma2:2b`.
-
-Reason:
-
-- Warmup-aware measured comparison showed both `gemma2:2b` and `qwen3.5:9b`
-  passing the current 7 deterministic golden cases.
-- `gemma2:2b` was materially faster on measured runs.
-- Local v1 needs responsive iteration while keeping `qwen3.5:9b` available for
-  quality checks.
-
-Expected tradeoff:
-
-- `gemma2:2b`: faster default, acceptable on current deterministic goldens.
-- `qwen3.5:9b`: slower, often returns more complete citation coverage.
-
-Do not treat this as a final production decision. Re-evaluate after more golden
-questions, conversation support, and table/form-aware retrieval are added.
-
-Observed first local A/B check for `how to enroll`:
-
-| Model | Answer generation latency | Citation behavior | Initial finding |
-|---|---:|---|---|
-| `gemma2:2b` | about 7.5 seconds | returned `E1`, `E3`, `E4` | faster, but skipped one useful eligibility citation |
-| `qwen3.5:9b` | about 33.1 seconds in this run | returned `E1`, `E2`, `E3`, `E4` | slower, more complete evidence coverage |
-
-This first check was not enough for a permanent model decision because model
-swapping and Ollama load state can distort latency. It led to the
-warmup-aware comparison script below.
 
 Warmup-aware measured comparison on the 7-case golden set:
 
@@ -75,127 +48,147 @@ Warmup-aware measured comparison on the 7-case golden set:
 | `gemma2:2b` | 7/7 | 2102 ms | 2767 ms | 1117 ms | 1766 ms | Local default |
 | `qwen3.5:9b` | 7/7 | 8110 ms | 14912 ms | 6565 ms | 11470 ms | Quality-check option |
 
-Quality caveat from the same measured report:
-
-- Qwen returned more citations for some cases, for example enrollment and
-  emergency panic attack.
-- Gemma still passed the current deterministic evidence/answer checks.
-- Decision: use Gemma as default for local responsiveness, keep Qwen selectable
-  and continue comparing as the golden set grows.
+Quality caveat: Qwen returns more citations for some cases. Gemma passes all
+current deterministic golden checks. Re-evaluate after golden set expands.
 
 ## Router Decision
 
-Initial plan considered running `gemma2:2b` on every query as an intent router.
-Live testing showed this added about 1.5 seconds when the router timed out:
-
-```text
-intent routing: fallback, about 1528 ms
-```
-
-That is not a good local tradeoff because current retrieval still uses the same
-hybrid path after routing.
-
-Current decision:
-
-- LLM-based routing is not mandatory for RAG.
-- Default local retrieval path is deterministic hybrid retrieval.
-- Keep an `intent routing` trace stage for visibility and future expansion.
-- Disable the LLM router by default:
+LLM-based routing adds ~1.5 s latency locally without changing the retrieval path.
+Disabled by default. Deterministic hybrid retrieval is the default.
 
 ```text
 router_enabled=false
 ```
-
-Expected local trace:
-
-```text
-intent routing: skipped
-duration_ms: 0
-source: deterministic
-selected_retrieval_path: hybrid
-reason: router disabled for local latency
-```
-
-Future use of `gemma2:2b` should be gated by evidence that it materially changes
-the retrieval path or improves quality without unacceptable latency.
 
 ## Retrieval Pipeline Decision
 
 Current request-time pipeline:
 
 ```text
-query analysis
-security context, fixed local principal in local v1
-response cache, scoped but disabled until safety validation
-intent routing, skipped locally by default
-dense retrieval
-sparse/BM25 retrieval
-rank fusion
-candidate expansion
-rerank
-context packing
-answer generation
-evidence preview
-trace persistence
+query analysis          → topic expansion, term expansion
+security context        → fixed local principal (local v1)
+response cache          → exact hash hit (no pipeline) or semantic hit (no pipeline)
+intent routing          → skipped locally by default
+dense retrieval         → nomic-embed-text, Qdrant
+sparse retrieval        → BM25, Qdrant
+rank fusion             → reciprocal rank fusion
+candidate expansion     → ±1 neighboring chunks around top 6 fused candidates
+rerank                  → MiniLM cross-encoder, batch=32, threads=4
+feedback adjustment     → apply_feedback_adjustments() adjusts rerank scores
+feedback exclusion      → candidates at cap (−4.0) removed before context packing
+context packing         → top admissible chunks packed into prompt
+answer generation       → Ollama streaming
+trace persistence       → persist_stream_trace after generation
 ```
 
-Dense retrieval handles semantic matches. Sparse/BM25 retrieval handles exact
-terms, IDs, dates, codes, and table-like values. Both are needed.
+## Feedback-Driven Reranking Decision
+
+Admin votes adjust rerank scores at query time via `apply_feedback_adjustments()`.
+
+Score deltas:
+
+| Label | Delta |
+|---|---|
+| correct | +1.5 |
+| incomplete | +0.3 |
+| wrong | −2.0 |
+
+Cap: ±4.0 (chunks never boosted or penalised beyond this).
+
+**Feedback exclusion rule**: if `feedback_adjustment <= -FEEDBACK_ADJUSTMENT_CAP`,
+the chunk is hard-excluded from context packing entirely. Rationale: when ALL
+retrieved results have been marked wrong (and hit the cap), ranking penalty alone
+is not enough — they would still win by default with no better alternatives.
+Exclusion forces the generator to see an empty context and say "not enough evidence."
+
+**Cache invalidation on wrong vote**: when a chunk receives a "wrong" label in
+`POST /api/retrieval/feedback`, any `response_cache` entries whose `context_snapshot`
+includes that `chunk_id` are deleted immediately. This prevents stale answers
+from being served from cache after feedback is given.
+
+Both adjustments apply in the SSE path (`/api/chat/stream`) and the non-SSE
+retrieval path (`/api/retrieval/search`).
+
+Feedback is admin-only. The user portal (`/search`) has no feedback buttons.
+
+## User Portal Decision
+
+A separate user-facing search portal exists at `/search`.
+
+Implementation:
+- Next.js route groups `(admin)/` and `(user)/` scope layouts without URL changes.
+- Admin pages (`/`, `/chat`, `/documents`, `/traces`) get the sidebar layout.
+- User portal (`/search`) gets a clean, minimal layout with no sidebar.
+
+User portal design choices:
+- No "from cache" badge — users do not need to know about internal caching.
+- No feedback buttons — only admins can vote on evidence quality.
+- Suggested questions as chips for first-time users.
+- SSE streaming answer with live status labels (friendly, not technical stage names).
+- Source list deduped by filename + section.
+
+## Table/Form-Aware Chunking Decision
+
+Docling exports tables as pipe-formatted markdown with cell widths padded to match
+content. For a 2-column benefits table (description | amount), the separator row
+contains hundreds of dashes. This has two problems:
+
+1. The cross-encoder's token budget is consumed by separator noise before reaching
+   dollar amounts deep in the chunk.
+2. Large tables (51 detected in the TX-NEXUS 210-page PDF) were emitted as one
+   oversized chunk, bypassing `MAX_CHUNK_CHARS`.
+
+Fixes applied in `backend/app/chunking.py`:
+
+- `normalize_table_markdown()` — collapses `|---N---| → | --- |` and strips cell
+  padding. Cuts chunk size ~50%, brings amounts to the top of the token window.
+- `split_large_table()` — splits tables at row boundaries, repeating the header
+  on each part so every chunk is independently parseable.
+- `is_form_block()` — detects key-value sections (≥60% lines match `Key: value`)
+  and tags them `element_type="form"`.
+- Section heading prepended to every table/form chunk as context prefix so
+  embedding is self-contained (e.g., `"In-Network Coverage\n\n| Service | Copay |..."`).
+
+Validation: 12 unit tests in `backend/tests/test_chunking.py`. After re-indexing
+the TX-NEXUS document, deductible and out-of-pocket queries correctly return
+specific dollar amounts.
+
+Known limitation: `normalize_table_markdown` works on markdown pipe tables only.
+Docling exports tables in this format; other parsers may differ.
+
+## Streaming Render Batching Decision
+
+Problem: SSE token events arrive at 20–40 tokens/second. Each token called
+`setStreamText((p) => p + token)`, causing a React re-render on every token.
+For a 200-token response this is 200 full component re-renders.
+
+Fix: buffer tokens in a `useRef`, schedule one `requestAnimationFrame` per render
+cycle (at most ~60fps), and call `setStreamText` with the fully accumulated buffer.
+Applied in both `/search` and admin `/chat` pages.
 
 ## Security Context Decision
 
 Local v1 uses a fixed server-side principal. Clients do not submit authoritative
-tenant, user, role, or ACL identifiers.
-
-Current local trace stage:
-
-```text
-security context
-tenant_id: local-development
-user_id: local-user
-principal_id: local-development-principal
-acl_mode: local_placeholder
-acl_filter_applied: false
-auth_source: server_fixed_local_v1
-```
-
-This is not production authorization. It is a visible placeholder so the query
-pipeline has the correct stage shape before real OIDC, tenant memberships,
-roles, and ACL filters are added.
+tenant, user, role, or ACL identifiers. This is a visible placeholder so the
+pipeline has the correct stage shape before real OIDC is added.
 
 ## Response Cache Decision
 
-A two-tier response cache is active.
+Two-tier response cache is active.
 
 **Tier 1 — Exact hash cache (PostgreSQL `response_cache`)**
 
 Cache key: SHA-256(normalized query + tenant_id + generation model + pipeline version).
 
-- No embedding needed on a hit.
-- `created_at` and `hit_count` tracked per entry.
-- Context snapshot stored alongside answer and citation_ids.
-
-Alembic migration: `0008_response_cache.py`.
-
 **Tier 2 — Semantic cache (Qdrant `pdfrag_response_cache_v1`)**
 
-On exact miss, embed the query with `nomic-embed-text` (768-dim) and search
-Qdrant with cosine similarity threshold **0.93**.
+Threshold: **0.93** (raised from 0.75 after false positives in insurance domain:
+"chest pain" vs "head pain" scored 0.84, "specialist copay" vs "emergency copay"
+scored 0.86 — different questions with different answers).
 
-Threshold history and rationale:
-- Started at 0.93 — too strict, genuine paraphrases never reached it.
-- Lowered to 0.75 — caused false positives: "chest pain" vs "head pain" scored
-  0.84, "specialist copay" vs "emergency copay" scored 0.86, "outpatient surgery"
-  vs "inpatient surgery" scored 0.93. All different questions with different answers.
-- Raised back to 0.93 — only near-identical rephrasing hits. Insurance domain
-  queries share sentence structure, making the gap between paraphrase and
-  different-question scores too small for a lower threshold to be safe.
-
-- Qdrant point IDs are deterministic UUIDs: `uuid.uuid5(NAMESPACE_DNS, cache_key)`.
-- Payload stores `cache_key`, `tenant_id`, and original `query`.
-- On a semantic hit, the full answer is fetched from PostgreSQL using the returned key.
-- The query embedding is reused when writing the new cache entry to avoid
-  a second embed call.
+**Cache invalidation**: when a chunk receives a "wrong" feedback vote, cache entries
+that cited that chunk are immediately evicted. This ensures stale wrong answers
+are not served after an admin marks them.
 
 Cache management:
 
@@ -204,134 +197,29 @@ GET  /api/cache  → {entries, total_hits, semantic_entries}
 DELETE /api/cache → {deleted, semantic_deleted}
 ```
 
-CORS must include DELETE for the browser clear-cache button to work.
+## Reranker Performance Decision
 
-On cache hit, the SSE endpoint emits three stage events (query analysis, security
-context, response cache) and then a `done` event with `from_cache: true`. No
-pipeline trace is saved on a cache hit.
+| Parameter | Before | After | Reason |
+|---|---|---|---|
+| `RERANK_BATCH_SIZE` | 8 | 32 | All 14–18 candidates in one forward pass |
+| `torch.set_num_threads` | 24 (default) | 4 | Scheduling contention for small model — biggest win |
+| `max_length` | 512 | **kept at 512** | 256 broke `no_evidence` (reranker needs full context to score irrelevant chunks sufficiently negative) |
 
-Do not serve cached answers across different tenants or pipeline versions.
-Extend cache key scope before enabling multi-tenant use.
-
-## Query Expansion Decision
-
-Deterministic query analysis is currently the main routing/query expansion
-mechanism. It handles known topic expansion such as:
-
-- enrollment
-- mental health
-- emergency care
-
-The topic expansion array can grow over time, but it should not become an
-uncontrolled synonym dump. Add terms only when they are:
-
-- observed in user questions,
-- observed in source documents,
-- useful for recall,
-- and validated by examples or evaluation cases.
-
-## Anxiety / Panic Attack Finding
-
-Question tested:
-
-```text
-I feel anxious and feel like having panic attacks, what kind of coverage do I have?
-```
-
-Finding:
-
-- The query should expand toward mental health and behavioral health.
-- It may also include emergency care terms because "panic attack" can imply an
-  urgent/emergency concern.
-- The answer should be conservative when documents mention mental health
-  coverage generally but do not explicitly say anxiety/panic attacks are covered.
-
-Expected behavior:
-
-- Retrieve mental health / behavioral health evidence.
-- Cite only actual evidence.
-- Say "not enough evidence" when exact coverage cannot be proven.
+Result: reranking **1,400–2,200 ms → ~1,000 ms**. Golden suite 7/7.
 
 ## Candidate Expansion Decision
 
-After rank fusion, the pipeline expands around top candidates with neighboring
-chunks before reranking.
-
-Reason:
-
-- Sometimes the top retrieved chunk is not the full answer.
-- Neighboring chunks often contain section continuation, eligibility context,
-  table headers, or related enrollment details.
-
-Observed example:
-
-- Query: `how to enroll`
-- Candidate expansion added 11 neighboring chunks.
-- Reranker then selected richer enrollment evidence.
-
-Current expansion:
-
-- window: 1 neighboring chunk before/after
-- seed candidates: first 6 fused candidates
-
-Future expansion candidates:
-
-- same section expansion
-- table header expansion
-- footnotes
-- form labels
-
-## Human-in-the-Loop Decision
-
-Human feedback is required because reranker score alone may not match human
-judgment. Example discussed:
-
-- Top result may have the highest score.
-- Second result may actually be the better answer.
-
-Current feedback labels:
-
-- correct evidence
-- relevant but incomplete
-- wrong / not useful
-
-Feedback is stored for later evaluation and tuning. It is not yet used
-automatically to retrain or alter ranking.
-
-## Trace Decision
-
-Trace visibility is a core requirement, not an optional debugging feature.
-
-Current trace support:
-
-- every retrieval response includes `trace_id`
-- full trace is persisted in PostgreSQL
-- `GET /api/traces/{trace_id}` returns stored trace JSON
-- `/traces/{trace_id}` renders a visual trace page
-
-The trace page shows:
-
-- original question
-- generated answer
-- evidence status
-- latency summary
-- cache event
-- pipeline stages
-- stage details
-- selected prompt chunks
-- packed prompt context
+After rank fusion, expand ±1 neighboring chunk around each of the top 6 fused
+candidates before reranking. Reason: top retrieved chunk may not be the full
+answer; neighbors contain section continuation, table headers, or eligibility context.
 
 ## API Decision
 
-The plan originally called for `POST /api/chat`. The project first implemented
-`POST /api/retrieval/search`.
-
-Current decision:
-
-- `/api/chat` has been removed. It was a blocking JSON endpoint.
+- `/api/chat` has been removed (blocking JSON endpoint).
 - `/api/chat/stream` is the primary chat endpoint — SSE `text/event-stream`.
 - `/api/retrieval/search` remains for the retrieval workbench and golden scripts.
 - `/api/cache` (GET / DELETE) manages the two-tier response cache.
+- `/api/retrieval/feedback` (POST) records admin votes and evicts stale cache.
 
 SSE event types:
 
@@ -342,188 +230,73 @@ token   — one per generated answer token
 done    — final: answer, citation_ids, trace_id, retrieval_mode, from_cache, cached_at
 ```
 
-Implementation notes:
+`scripts/run_golden_queries.py` calls `/api/retrieval/search` — do not change this.
 
-- Real-time stages use `asyncio.Queue` + `asyncio.create_task`; pipeline runs in
-  background and puts stages on the queue as they complete.
-- `on_stage: Callable[[RetrievalStage], Awaitable[None]]` is the callback contract.
-- `scripts/run_golden_queries.py` calls `/api/retrieval/search` (synchronous,
-  not SSE) — do not change this.
-- `retrieval_mode` from the router decision propagates through the SSE path and
-  is stored in the cache entry.
+## Query Expansion Decision
 
-## SSE Streaming Decision
+Deterministic query analysis handles known topic expansion:
+- enrollment
+- mental health
+- emergency care
 
-The blocking `POST /api/chat` endpoint was replaced with a streaming SSE endpoint
-`POST /api/chat/stream` (`text/event-stream`).
-
-Reason:
-
-- Even at 2–8 seconds total, streaming makes the response feel instant because
-  the user sees stages and tokens as they arrive.
-- Blocking JSON response required waiting for full pipeline completion before
-  anything was rendered.
-
-Real-time stage implementation:
-
-- `on_stage` callback added to `run_pipeline_to_context` with signature
-  `Callable[[RetrievalStage], Awaitable[None]] | None`.
-- `asyncio.Queue[RetrievalStage | None]` bridges the pipeline coroutine and the
-  SSE generator.
-- `asyncio.create_task` runs the pipeline concurrently; the SSE generator drains
-  the queue until the `None` sentinel arrives.
-- This avoids buffering: stages appear in the UI the moment each step finishes.
-
-Known constraint:
-
-- `asyncio.Queue` requires the SSE generator and pipeline to run on the same
-  event loop. This works with FastAPI's default single-process dev server and
-  Uvicorn's default asyncio loop. Review if switching to a multi-process worker.
+Add terms only when observed in user questions AND source documents AND validated
+by a golden case. Do not make this an uncontrolled synonym dump.
 
 ## Ingestion Quality Metrics Decision
 
-Ingestion quality metrics are observability only. They may be displayed in the
-document UI and stored in ingestion trace details, but they must not change
-request-time answer quality paths by themselves.
+Observability only. Stored in ingestion trace details and displayed in `/documents`.
+Must not alter parsing, chunking, indexing, retrieval, or generation paths.
 
-Safe scope:
-
-- parser used
-- page count
-- character count and characters per page
-- empty page count when available
-- chunk count and chunk-size summary
-- table-like content count
-- OCR used/needed indicators
-- human-readable warnings
-
-Do not make this slice alter parsing, chunking, indexing, retrieval, reranking,
-context packing, prompts, or generation defaults. Table/form-aware retrieval is
-a separate later quality-improvement slice.
+Metrics surfaced:
+- parser used, page count, character count, chars/page
+- empty page count, table/form detected counts
+- chunk count, average/max chunk chars
+- OCR used/needed indicators, human-readable warnings
 
 ## RAGAS Decision
 
-RAGAS is not required in the request-time flow.
-
-Current decision:
-
-- Use deterministic evaluation metrics first.
-- Add RAGAS only as an optional offline evaluation adapter near the end.
-- Store evaluator model, prompt, metric version, raw rationale, and scores.
-- Treat LLM-judged scores as directional, not ground truth.
-
-## Current Validation Commands
-
-Backend:
-
-```bash
-.runtime/venv/bin/ruff check backend
-.runtime/venv/bin/pytest
-```
-
-Frontend:
-
-```bash
-npm run lint
-npm run build
-```
-
-Live golden checks:
-
-```bash
-.runtime/venv/bin/python scripts/run_golden_queries.py --generation-model gemma2:2b
-.runtime/venv/bin/python scripts/run_golden_queries.py --generation-model qwen3.5:9b --case enrollment
-.runtime/venv/bin/python scripts/run_golden_queries.py \
-  --generation-model gemma2:2b \
-  --json-output .runtime/evals/golden-gemma.json
-.runtime/venv/bin/python scripts/compare_generation_models.py \
-  --models qwen3.5:9b,gemma2:2b \
-  --json-output .runtime/evals/model-comparison.json
-```
-
-The golden and model-comparison scripts require the local backend, indexed
-documents, Qdrant, Ollama, and supporting services to be running.
-
-Current golden cases:
-
-- `enrollment`
-- `mental_health_panic`
-- `emergency_panic_attack`
-- `specialist_visit_copay`
-- `prescription_drugs`
-- `preventive_care`
-- `no_evidence`
-
-Observed first run:
-
-- `gemma2:2b`: 7/7 golden checks passed.
-- `qwen3.5:9b`: 7/7 golden checks passed.
-
-Warmup-aware model comparison:
-
-- Implemented in `scripts/compare_generation_models.py`.
-- Warmup pass(es) are tracked separately from measured pass(es).
-- Small validation with `gemma2:2b` on `specialist_visit_copay` showed:
-  - warmup elapsed: 9612 ms
-  - measured elapsed: 2458 ms
-  - measured answer generation: 374 ms
-- Decision: do not compare generation models using first-run latency alone.
-
-## Reranker Performance Decision
-
-MiniLM-L6 cross-encoder runs on CPU. Default PyTorch settings caused it to be
-the pipeline bottleneck at 1,400–2,200 ms per query.
-
-Root causes found and fixed:
-
-| Parameter | Before | After | Reason |
-|---|---|---|---|
-| `RERANK_BATCH_SIZE` | 8 | 32 | Eliminates 2–3 forward passes; all 14–18 candidates in one pass |
-| `torch.set_num_threads` | 24 (default) | 4 | 24 threads caused scheduling contention for this small model — biggest win |
-| `max_length` | 512 | **kept at 512** | Tested 256 — broke `no_evidence` golden case (reranker needs full context to correctly score irrelevant chunks as very negative) |
-
-Result: reranking **1,400–2,200 ms → ~1,000 ms**. Golden suite 7/7 passes.
-
-`max_length=256` finding: all chunks average 387 tokens (1,549 chars). Some chunks
-are massive (48K chars, ~12K tokens — pipe-formatted tables / TOC). Truncation at
-256 caused the "lunar habitat repairs" no-evidence query to rank a "reimbursement"
-chunk too high, leading the LLM to hallucinate a tangential answer. 512 keeps the
-negative rerank scores deep enough that the LLM correctly refuses.
+Not required in request-time flow. Add only as optional offline evaluation adapter.
+Store evaluator model, prompt, metric version, raw rationale. Treat LLM-judged
+scores as directional, not ground truth.
 
 ## Completed Slices (summary)
 
 1. Dense + sparse hybrid retrieval with RRF fusion.
 2. Candidate expansion and MiniLM reranking.
 3. Full RAG trace persistence and visual trace page.
-4. Deterministic golden evaluation suite (7 cases).
+4. Deterministic golden evaluation suite (7 cases, 7/7 passing).
 5. Warmup-aware model latency comparison script.
 6. `gemma2:2b` as default generation model.
-7. Ingestion quality metrics UI (observability only).
-8. SSE streaming endpoint (`/api/chat/stream`) with real-time stages and token streaming.
-9. Two-tier response cache: exact hash (PostgreSQL) + semantic (Qdrant 0.93 threshold).
-10. Clear cache UI button and `DELETE /api/cache` endpoint.
-11. `retrieval_mode` propagated through SSE path and stored in cache.
-12. Semantic cache threshold set to 0.93 after false positive analysis (chest pain vs head pain, specialist vs emergency copay).
-13. Reranker CPU tuning: batch=32, threads=4 → rerank 1,400–2,200 ms → ~1,000 ms.
+7. Ingestion quality observability, document delete, re-chunk UI.
+8. SSE streaming endpoint with real-time stages and token streaming.
+9. Two-tier response cache: exact hash (PostgreSQL) + semantic (Qdrant 0.93).
+10. Clear cache UI and `DELETE /api/cache`.
+11. `retrieval_mode` propagated through SSE and stored in cache.
+12. Semantic cache threshold calibrated to 0.93.
+13. Reranker CPU tuning: batch=32, threads=4.
+14. User-facing benefits search portal at `/search` with route groups.
+15. Feedback-driven reranking with `apply_feedback_adjustments()`.
+16. Admin-only feedback buttons; user portal has no feedback mechanism.
+17. Feedback exclusion: chunks at −4.0 cap hard-excluded from context packing.
+18. Cache invalidation when chunk receives "wrong" feedback vote.
+19. Table/form-aware chunking: normalize, split, form detection, context prefix, 12 tests.
+20. Streaming render batching via `requestAnimationFrame` in both portal pages.
 
-## Pending Slices in Recommended Order
+## Pending Slices (priority order)
 
-1. Add table/form-aware chunking and retrieval.
-2. Add conversation support with provenance-safe summaries.
-3. Add DOCX/PPTX/XLSX/CSV/HTML support.
-4. Add admin trace list/search page.
-5. Feedback-driven reranking (votes stored but not yet used).
-6. Document routing / filtering (UHC vs NJ Transit plan bleed).
-7. Add authentication and tenant isolation after local v1 is stable.
-8. Add optional offline RAGAS adapter.
+1. **Conversation support** — multi-turn with provenance-safe summaries.
+2. **Document routing / plan filtering** — prevent answer bleed between multiple plan docs.
+3. **Admin trace list/search page** — browse and filter past queries with traces.
+4. **More document formats** — DOCX, XLSX, CSV, HTML, PPTX, OCR fallback.
+5. **FigJam architecture diagram update** — user portal, feedback loop, table chunking.
+6. **Authentication and tenant isolation** — OIDC, roles, ACLs, Qdrant filters.
+7. **Optional offline RAGAS adapter**.
 
 ## Open Questions
 
-- What threshold should decide whether a query is ambiguous enough to use the
-  optional LLM router in the future?
-- Should human feedback affect reranking manually through evaluation reports
-  first, or automatically through ranking rules?
-- Which remaining golden questions should be added after retrieval/generation
-  stabilizes?
-- Which document types should be prioritized after PDF/text/Markdown:
-  DOCX, XLSX, CSV, HTML, or scanned PDFs?
+- What threshold should trigger the optional LLM router in future?
+- Should human feedback affect reranking through evaluation reports first, or
+  automatically through ranking rules? (Currently: automatically at query time.)
+- Which remaining golden questions should be added as the golden set grows?
+- Which document formats should be prioritized after PDF: DOCX, XLSX, HTML, or scanned PDFs?
+- Should the user portal support conversation history, or stay stateless?
