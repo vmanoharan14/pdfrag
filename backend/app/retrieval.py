@@ -1126,8 +1126,11 @@ async def run_pipeline_to_context(
     ))
 
     started_at = time.perf_counter()
+    # Exclude chunks that have accumulated enough "wrong" admin feedback to hit
+    # the cap — penalising them is not enough if they are the only results.
+    admissible = [c for c in ranked if c.feedback_adjustment > -FEEDBACK_ADJUSTMENT_CAP]
     packed_context = pack_context(
-        ranked,
+        admissible,
         max_chars=settings.context_max_chars,
         max_chunks=settings.context_max_chunks,
     )
@@ -1370,8 +1373,9 @@ async def search_documents(
     )
 
     started_at = time.perf_counter()
+    admissible = [c for c in ranked if c.feedback_adjustment > -FEEDBACK_ADJUSTMENT_CAP]
     packed_context = pack_context(
-        ranked,
+        admissible,
         max_chars=settings.context_max_chars,
         max_chunks=settings.context_max_chunks,
     )
@@ -1503,5 +1507,27 @@ async def record_evidence_feedback(
     session.add(feedback)
     await session.commit()
     await session.refresh(feedback)
+
+    # When a chunk is marked wrong, evict any cache entries that used it so the
+    # next query re-runs retrieval and respects the updated feedback.
+    if request.label == "wrong":
+        chunk_id_str = str(request.chunk_id)
+        cache_rows = await session.scalars(
+            select(ResponseCache).where(
+                ResponseCache.tenant_id == LOCAL_TENANT_ID,
+            )
+        )
+        to_delete = [
+            row
+            for row in cache_rows
+            if any(
+                str(b.get("chunk_id", "")) == chunk_id_str
+                for b in (row.context_snapshot.get("blocks") or [])
+            )
+        ]
+        for row in to_delete:
+            await session.delete(row)
+        if to_delete:
+            await session.commit()
 
     return EvidenceFeedbackResponse(id=feedback.id, status="recorded")
