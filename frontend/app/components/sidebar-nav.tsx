@@ -8,6 +8,7 @@ const links = [
   { href: "/chat", icon: "◫", label: "Chat" },
   { href: "/traces/demo", icon: "⌘", label: "Traces" },
   { href: "/documents", icon: "▤", label: "Documents" },
+  { href: "/search", icon: "⊙", label: "User Portal" },
 ];
 
 export function SidebarNav() {
