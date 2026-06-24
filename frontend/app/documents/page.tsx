@@ -19,7 +19,27 @@ type DocumentItem = {
   vector_collection: string | null;
   sparse_indexed_chunk_count: number;
   sparse_vector_collection: string | null;
+  quality?: IngestionQuality | null;
   steps: TraceStep[];
+};
+
+type IngestionQuality = {
+  status: string;
+  parser_used: string | null;
+  page_count: number | null;
+  character_count: number | null;
+  characters_per_page: number | null;
+  empty_page_count: number | null;
+  chunk_count: number;
+  total_chunk_chars: number | null;
+  average_chunk_chars: number | null;
+  max_chunk_chars: number | null;
+  table_detected_count: number;
+  ocr_used: boolean;
+  ocr_needed: boolean;
+  warnings: string[];
+  source: string;
+  current_stage: string;
 };
 
 type TraceStep = {
@@ -56,6 +76,39 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatNumber(value: number | null) {
+  return value === null ? "—" : value.toLocaleString();
+}
+
+function fallbackQuality(item: DocumentItem): IngestionQuality {
+  return {
+    status:
+      item.status === "queued" || item.status === "processing"
+        ? "pending"
+        : item.status === "failed"
+          ? "failed"
+          : "good",
+    parser_used: item.parser_used,
+    page_count: item.page_count,
+    character_count: null,
+    characters_per_page: null,
+    empty_page_count: null,
+    chunk_count: item.chunk_count,
+    total_chunk_chars: null,
+    average_chunk_chars: null,
+    max_chunk_chars: null,
+    table_detected_count: 0,
+    ocr_used: false,
+    ocr_needed: false,
+    warnings:
+      item.status === "failed"
+        ? ["Ingestion failed; quality metrics may be incomplete."]
+        : [],
+    source: "frontend_fallback",
+    current_stage: item.current_stage,
+  };
 }
 
 function collapseTraceSteps(steps: TraceStep[]): TraceStep[] {
@@ -197,6 +250,32 @@ export default function DocumentsPage() {
     }
   }
 
+  async function deleteVersion(versionId: string, filename: string) {
+    if (!window.confirm(`Remove "${filename}" and all its chunks and vectors?`)) return;
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await fetch(
+        `${backendUrl}/api/document-versions/${versionId}`,
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload.detail ?? "Could not delete document.");
+      }
+      setMessage(`Removed ${filename}.`);
+      setChunksByVersion((current) => {
+        const next = { ...current };
+        delete next[versionId];
+        return next;
+      });
+      if (expandedVersionId === versionId) setExpandedVersionId(null);
+      await loadDocuments();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Request failed.");
+    }
+  }
+
   async function toggleChunks(versionId: string) {
     if (expandedVersionId === versionId) {
       setExpandedVersionId(null);
@@ -292,6 +371,7 @@ export default function DocumentsPage() {
             ) : (
               documents.map((item) => {
                 const stageSteps = collapseTraceSteps(item.steps);
+                const quality = item.quality ?? fallbackQuality(item);
 
                 return (
                   <article className="document-entry" key={item.version_id}>
@@ -328,6 +408,13 @@ export default function DocumentsPage() {
                         </span>
                         <div>
                           <strong>{item.status}</strong>
+                          <button
+                            className="delete-button"
+                            onClick={() => void deleteVersion(item.version_id, item.filename)}
+                            type="button"
+                          >
+                            Remove
+                          </button>
                           {item.chunk_count > 0 ? (
                             <button
                               className="retry-button"
@@ -354,8 +441,50 @@ export default function DocumentsPage() {
                                   ? "Build index"
                                   : "Build chunks"}
                             </button>
+                          ) : item.status === "completed" && quality.status === "review" ? (
+                            <button
+                              className="retry-button"
+                              onClick={() => void retryJob(item.job_id)}
+                              type="button"
+                            >
+                              Re-chunk
+                            </button>
                           ) : null}
                         </div>
+                        </div>
+                        <div className={`quality-panel ${quality.status}`}>
+                          <div className="quality-heading">
+                            <strong>Quality</strong>
+                            <span>{quality.status}</span>
+                          </div>
+                          <div className="quality-metrics">
+                            <span>chars {formatNumber(quality.character_count)}</span>
+                            <span>
+                              chars/page {formatNumber(quality.characters_per_page)}
+                            </span>
+                            <span>
+                              avg chunk {formatNumber(quality.average_chunk_chars)}
+                            </span>
+                            <span>
+                              max chunk {formatNumber(quality.max_chunk_chars)}
+                            </span>
+                            <span>tables {quality.table_detected_count}</span>
+                            <span>
+                              empty pages {formatNumber(quality.empty_page_count)}
+                            </span>
+                            {quality.ocr_used || quality.ocr_needed ? (
+                              <span>
+                                OCR {quality.ocr_used ? "used" : "may be needed"}
+                              </span>
+                            ) : null}
+                          </div>
+                          {quality.warnings.length > 0 ? (
+                            <ul className="quality-warnings">
+                              {quality.warnings.map((warning) => (
+                                <li key={warning}>{warning}</li>
+                              ))}
+                            </ul>
+                          ) : null}
                         </div>
                         <ol>
                           {stageSteps.map((step, index) => (

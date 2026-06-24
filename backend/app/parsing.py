@@ -20,6 +20,7 @@ from app.broker import broker as _broker  # noqa: F401
 from app.chunking import chunk_markdown
 from app.database import session_factory
 from app.indexing import index_chunks_dense
+from app.ingestion_quality import build_ingestion_quality, summarize_chunk_quality
 from app.models import DocumentChunk, DocumentVersion, IngestionJob, IngestionTraceStep
 from app.sparse_indexing import index_chunks_sparse
 from app.storage import get_object_storage
@@ -92,6 +93,48 @@ def parse_text(path: Path) -> ParsedDocument:
     )
 
 
+def docling_page_quality_details(document: object, markdown: str) -> dict:
+    pages = getattr(document, "pages", {}) or {}
+    page_numbers = sorted(pages)
+    page_text_chars = {page_no: 0 for page_no in page_numbers}
+
+    for page_no in page_numbers:
+        try:
+            page_items = document.iterate_items(page_no=page_no, with_groups=False)  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            continue
+
+        for item, _level in page_items:
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                page_text_chars[page_no] += len(text.strip())
+
+    table_pages: set[int] = set()
+    for table in getattr(document, "tables", []) or []:
+        for provenance in getattr(table, "prov", []) or []:
+            page_no = getattr(provenance, "page_no", None)
+            if isinstance(page_no, int):
+                table_pages.add(page_no)
+
+    empty_page_count = sum(
+        1
+        for page_no in page_numbers
+        if page_text_chars.get(page_no, 0) == 0 and page_no not in table_pages
+    )
+
+    return {
+        "characters": len(markdown),
+        "pages": len(page_numbers),
+        "empty_page_count": empty_page_count,
+        "text_item_count": len(getattr(document, "texts", []) or []),
+        "table_detected_count": len(getattr(document, "tables", []) or []),
+        "form_detected_count": len(getattr(document, "form_items", []) or []),
+        "key_value_detected_count": len(getattr(document, "key_value_items", []) or []),
+        "picture_count": len(getattr(document, "pictures", []) or []),
+        "ocr_enabled": False,
+    }
+
+
 def parse_pdf(path: Path) -> ParsedDocument:
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = False
@@ -108,15 +151,12 @@ def parse_pdf(path: Path) -> ParsedDocument:
     result = converter.convert(path)
     document = result.document
     markdown = document.export_to_markdown()
+    details = docling_page_quality_details(document, markdown)
     return ParsedDocument(
         markdown=markdown,
         parser_used="docling",
         page_count=len(document.pages),
-        details={
-            "characters": len(markdown),
-            "pages": len(document.pages),
-            "ocr_enabled": False,
-        },
+        details=details,
     )
 
 
@@ -290,6 +330,7 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
             chunks = chunk_markdown(parsed.markdown)
             if not chunks:
                 raise ValueError("Parsed document produced no chunks.")
+            chunk_quality = summarize_chunk_quality(chunks)
 
             await session.execute(
                 delete(DocumentChunk).where(DocumentChunk.document_version_id == version.id)
@@ -319,6 +360,10 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
                 details={
                     "chunk_count": len(chunks),
                     "chunker": "markdown-layout-v1",
+                    "total_chunk_chars": chunk_quality.total_chunk_chars,
+                    "average_chunk_chars": chunk_quality.average_chunk_chars,
+                    "max_chunk_chars": chunk_quality.max_chunk_chars,
+                    "table_detected_count": chunk_quality.table_detected_count,
                 },
                 duration_ms=round((perf_counter() - started) * 1000),
             )
@@ -385,6 +430,18 @@ async def process_ingestion(job_id: uuid.UUID) -> None:
                     "chunk_count": len(chunks),
                     "dense_vectors": index_result.point_count,
                     "sparse_vectors": sparse_result.point_count,
+                    "quality": build_ingestion_quality(
+                        parser_used=parsed.parser_used,
+                        page_count=parsed.page_count,
+                        job_status="completed",
+                        current_stage="ingestion_complete",
+                        parse_details=parsed.details,
+                        chunk_count=chunk_quality.chunk_count,
+                        total_chunk_chars=chunk_quality.total_chunk_chars,
+                        average_chunk_chars=chunk_quality.average_chunk_chars,
+                        max_chunk_chars=chunk_quality.max_chunk_chars,
+                        table_detected_count=chunk_quality.table_detected_count,
+                    ),
                 },
             )
 

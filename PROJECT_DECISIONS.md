@@ -325,6 +325,27 @@ Implementation status:
 - The chat UI calls `/api/chat`.
 - `/api/retrieval/search` remains available.
 
+## Ingestion Quality Metrics Decision
+
+Ingestion quality metrics are observability only. They may be displayed in the
+document UI and stored in ingestion trace details, but they must not change
+request-time answer quality paths by themselves.
+
+Safe scope:
+
+- parser used
+- page count
+- character count and characters per page
+- empty page count when available
+- chunk count and chunk-size summary
+- table-like content count
+- OCR used/needed indicators
+- human-readable warnings
+
+Do not make this slice alter parsing, chunking, indexing, retrieval, reranking,
+context packing, prompts, or generation defaults. Table/form-aware retrieval is
+a separate later quality-improvement slice.
+
 ## RAGAS Decision
 
 RAGAS is not required in the request-time flow.
@@ -332,7 +353,7 @@ RAGAS is not required in the request-time flow.
 Current decision:
 
 - Use deterministic evaluation metrics first.
-- Add RAGAS only as an optional offline evaluation adapter.
+- Add RAGAS only as an optional offline evaluation adapter near the end.
 - Store evaluator model, prompt, metric version, raw rationale, and scores.
 - Treat LLM-judged scores as directional, not ground truth.
 
@@ -395,15 +416,15 @@ Warmup-aware model comparison:
 
 ## Pending Slices in Recommended Order
 
-1. Add optional offline RAGAS adapter.
-2. Add SSE streaming for answer text and live trace events.
-3. Add conversation support with provenance-safe summaries.
-4. Improve ingestion quality metrics: parser coverage, table/form/OCR
+1. Improve ingestion quality metrics: parser coverage, table/form/OCR
     indicators.
-5. Add table/form-aware chunking and retrieval.
-6. Add DOCX/PPTX/XLSX/CSV/HTML support.
-7. Add admin trace list/search page.
-8. Add authentication and tenant isolation after local v1 is stable.
+2. Add table/form-aware chunking and retrieval.
+3. Add conversation support with provenance-safe summaries.
+4. Add SSE streaming for answer text and live trace events.
+5. Add DOCX/PPTX/XLSX/CSV/HTML support.
+6. Add admin trace list/search page.
+7. Add authentication and tenant isolation after local v1 is stable.
+8. Add optional offline RAGAS adapter.
 
 ## Open Questions
 

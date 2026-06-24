@@ -1,6 +1,6 @@
 # PDFRAG Restart Plan
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 Use this file to resume work after a break without relying on chat memory.
 
@@ -14,29 +14,31 @@ Use this file to resume work after a break without relying on chat memory.
 
 ## Current Git State at Time of Writing
 
-Latest completed slice to commit now:
+Latest completed slice:
 
 ```text
-Response-cache foundation trace stage
+Generation default optimization decision
 ```
 
 Current uncommitted slice:
 
 ```text
-None after committing the response-cache foundation trace stage.
+Ingestion quality metrics observability
 ```
 
-Files that belong to the response-cache foundation commit:
+Files that belong to the current ingestion quality metrics slice:
 
 ```text
 NEXT_STEPS.md
 PROJECT_DECISIONS.md
-backend/app/retrieval.py
-backend/tests/test_retrieval.py
-scripts/run_golden_queries.py
+backend/app/documents.py
+backend/app/ingestion_quality.py
+backend/app/parsing.py
+backend/tests/test_documents.py
+backend/tests/test_ingestion_quality.py
+frontend/app/documents/page.tsx
+frontend/app/globals.css
 ```
-
-After this commit, start with the warmup-aware model latency comparison slice.
 
 ## Completed Slice: Response Cache Foundation
 
@@ -356,17 +358,55 @@ Quality caveat:
 - Revisit this after the golden set expands and table/form-aware retrieval is
   added.
 
-### 1. Add optional offline RAGAS adapter
+### Current slice: Ingestion quality metrics
 
-Only after deterministic golden checks are useful.
+Purpose:
+
+- Add parser/chunking quality visibility without changing parsing, chunking,
+  indexing, retrieval, reranking, prompts, or answer generation.
+- Surface document-level warnings before trusting retrieval over weakly parsed
+  documents.
+
+Behavior to validate in `/documents`:
+
+```text
+Quality
+chars
+chars/page
+avg chunk
+max chunk
+tables
+empty pages
+OCR may be needed, when detected
+warnings, when detected
+```
+
+Safety boundary:
+
+- Observability only.
+- Do not change output quality paths in this slice.
+
+### 1. Add table/form-aware retrieval
+
+This is the next quality-critical slice after ingestion metrics.
+
+Later after text RAG stabilizes:
+
+- table headers
+- row groups
+- form key-value pairs
+- table summaries
+- row-level expansion
+
+### 2. Add conversation support with provenance-safe summaries
 
 Rules:
 
-- Not request-time.
-- Store evaluator model, prompt, metric version, raw rationale.
-- Treat LLM-evaluated scores as directional, not ground truth.
+- Conversation summary must not replace source evidence.
+- Summary can help with user context, but answer still needs retrieved evidence.
+- Store conversation id and summary provenance.
 
-### 2. Add SSE streaming for answer and live trace
+### 3. Add SSE streaming for answer and live trace
 
 Reason:
 
@@ -383,39 +423,7 @@ This is bigger than prior slices; split carefully:
 2. Frontend streaming render.
 3. Live trace event render.
 
-### 3. Conversation support with provenance-safe summaries
-
-Rules:
-
-- Conversation summary must not replace source evidence.
-- Summary can help with user context, but answer still needs retrieved evidence.
-- Store conversation id and summary provenance.
-
-### 4. Ingestion quality metrics
-
-Add parser/chunking quality signals:
-
-- parser used
-- page count
-- chunk count
-- empty page count
-- table detected count
-- OCR needed/used later
-- warnings
-
-Show these in document/ingestion UI.
-
-### 5. Table/form-aware retrieval
-
-Later after text RAG stabilizes:
-
-- table headers
-- row groups
-- form key-value pairs
-- table summaries
-- row-level expansion
-
-### 6. More document formats
+### 4. More document formats
 
 After PDF/text/Markdown path is stable:
 
@@ -426,7 +434,7 @@ After PDF/text/Markdown path is stable:
 - PPTX
 - scanned PDFs/OCR
 
-### 7. Admin trace list/search page
+### 5. Admin trace list/search page
 
 Add:
 
@@ -437,9 +445,19 @@ Add:
 - filter by question text
 - open trace detail
 
-### 8. Authentication and tenant isolation
+### 6. Authentication and tenant isolation
 
 Defer until local v1 is stable.
+
+### 7. Optional offline RAGAS adapter
+
+Good to have near the end, not required for the product path.
+
+Rules:
+
+- Not request-time.
+- Store evaluator model, prompt, metric version, raw rationale.
+- Treat LLM-evaluated scores as directional, not ground truth.
 
 Future work:
 

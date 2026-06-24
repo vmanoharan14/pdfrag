@@ -1,8 +1,15 @@
 from io import BytesIO
 
 import pytest
-from app.documents import safe_filename, validate_upload
+from app.documents import latest_step_details, safe_filename, validate_upload
 from fastapi import HTTPException, UploadFile
+
+
+class FakeTraceStep:
+    def __init__(self, sequence: int, stage: str, details: dict | None) -> None:
+        self.sequence = sequence
+        self.stage = stage
+        self.details = details
 
 
 def test_safe_filename_removes_paths_and_unsafe_characters() -> None:
@@ -35,3 +42,13 @@ def test_validate_upload_rejects_unsupported_file() -> None:
         validate_upload(upload)
 
     assert exc.value.status_code == 415
+
+
+def test_latest_step_details_returns_most_recent_stage_details() -> None:
+    steps = [
+        FakeTraceStep(1, "parse", {"characters": 10}),
+        FakeTraceStep(2, "chunk", {"chunk_count": 1}),
+        FakeTraceStep(3, "parse", {"characters": 20}),
+    ]
+
+    assert latest_step_details(steps, "parse") == {"characters": 20}
