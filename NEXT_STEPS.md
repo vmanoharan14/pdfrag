@@ -197,6 +197,10 @@ Current golden cases:
 
 - `enrollment`
 - `mental_health_panic`
+- `emergency_panic_attack`
+- `specialist_visit_copay`
+- `prescription_drugs`
+- `preventive_care`
 - `no_evidence`
 
 ## Important Decisions So Far
@@ -215,7 +219,7 @@ See `PROJECT_DECISIONS.md` for full detail. Key points:
 
 ## Recommended Next Slices
 
-### Current slice in progress: Answer latency summary in Chat UI
+### Recently completed: Answer latency summary in Chat UI
 
 Purpose:
 
@@ -243,11 +247,32 @@ Validation:
 4. Expected: generation is usually the bottleneck.
 5. Expected: selected answer model is visible in the latency card.
 
-Commit message when approved:
+Committed as:
 
 ```text
 feat: show chat latency summary
 ```
+
+### Recently completed: Expanded deterministic golden questions
+
+Current golden cases:
+
+- `enrollment`
+- `mental_health_panic`
+- `emergency_panic_attack`
+- `specialist_visit_copay`
+- `prescription_drugs`
+- `preventive_care`
+- `no_evidence`
+
+Why these were added:
+
+- They cover enrollment, mental health, emergency care, specialist copay,
+  prescription drugs, preventive care, and no-evidence behavior.
+- They are deterministic string/evidence checks, not LLM-judge checks.
+- Broad “doctor visit cost” was intentionally not added yet because the current
+  indexed evidence returned `Not enough evidence`; this needs either better
+  query expansion or a more specific golden case.
 
 ### 1. Add warmup-aware model latency comparison
 
@@ -286,24 +311,7 @@ Optional command to inspect loaded Ollama models:
 curl -sS http://127.0.0.1:11434/api/ps
 ```
 
-### 2. Add more golden questions
-
-Current 3 cases are a start, not enough.
-
-Add at least:
-
-- specialist visit copay
-- emergency care coverage
-- mental health outpatient services
-- dependent enrollment
-- open enrollment
-- exact phrase/no evidence
-- table-of-contents avoidance
-- multi-document answer
-
-Keep them deterministic first. Do not add LLM judges yet.
-
-### 3. Decide whether to optimize generation
+### 2. Decide whether to optimize generation
 
 Possible options:
 
@@ -316,7 +324,7 @@ Possible options:
 
 Do not blindly switch default to Gemma until golden results compare quality.
 
-### 4. Add optional offline RAGAS adapter
+### 3. Add optional offline RAGAS adapter
 
 Only after deterministic golden checks are useful.
 
@@ -326,7 +334,7 @@ Rules:
 - Store evaluator model, prompt, metric version, raw rationale.
 - Treat LLM-evaluated scores as directional, not ground truth.
 
-### 5. Add SSE streaming for answer and live trace
+### 4. Add SSE streaming for answer and live trace
 
 Reason:
 
@@ -343,7 +351,7 @@ This is bigger than prior slices; split carefully:
 2. Frontend streaming render.
 3. Live trace event render.
 
-### 6. Conversation support with provenance-safe summaries
+### 5. Conversation support with provenance-safe summaries
 
 Rules:
 
@@ -351,7 +359,7 @@ Rules:
 - Summary can help with user context, but answer still needs retrieved evidence.
 - Store conversation id and summary provenance.
 
-### 7. Ingestion quality metrics
+### 6. Ingestion quality metrics
 
 Add parser/chunking quality signals:
 
@@ -365,7 +373,7 @@ Add parser/chunking quality signals:
 
 Show these in document/ingestion UI.
 
-### 8. Table/form-aware retrieval
+### 7. Table/form-aware retrieval
 
 Later after text RAG stabilizes:
 
@@ -375,7 +383,7 @@ Later after text RAG stabilizes:
 - table summaries
 - row-level expansion
 
-### 9. More document formats
+### 8. More document formats
 
 After PDF/text/Markdown path is stable:
 
@@ -386,7 +394,7 @@ After PDF/text/Markdown path is stable:
 - PPTX
 - scanned PDFs/OCR
 
-### 10. Admin trace list/search page
+### 9. Admin trace list/search page
 
 Add:
 
@@ -397,7 +405,7 @@ Add:
 - filter by question text
 - open trace detail
 
-### 11. Authentication and tenant isolation
+### 10. Authentication and tenant isolation
 
 Defer until local v1 is stable.
 

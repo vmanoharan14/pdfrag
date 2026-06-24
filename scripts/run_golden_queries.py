@@ -53,12 +53,36 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
     GoldenCase(
         name="mental_health_panic",
         query=(
-            "I feel anxious and feel like having panic attacks, "
-            "what kind of coverage do I have?"
+            "I feel anxious and feel like having panic attacks, what kind of coverage do I have?"
         ),
         expected_any_sections=("mental health", "behavioral health", "emergency"),
         expected_any_answer_terms=("mental", "behavioral", "not enough evidence"),
         expected_any_topics=("mental_health",),
+    ),
+    GoldenCase(
+        name="emergency_panic_attack",
+        query=("If I am having a panic attack and need emergency help, what coverage applies?"),
+        expected_any_sections=("medical emergency", "mental health", "emergency"),
+        expected_any_answer_terms=("emergency", "911", "mental health"),
+        expected_any_topics=("mental_health", "emergency_care"),
+    ),
+    GoldenCase(
+        name="specialist_visit_copay",
+        query="what is the specialist visit copayment?",
+        expected_any_sections=("specialist", "copayment", "in-network"),
+        expected_any_answer_terms=("specialist", "$5.00", "copayment"),
+    ),
+    GoldenCase(
+        name="prescription_drugs",
+        query="are prescription drugs covered?",
+        expected_any_sections=("prescription drug", "network pharmacy", "drugs"),
+        expected_any_answer_terms=("prescription", "drug", "covered"),
+    ),
+    GoldenCase(
+        name="preventive_care",
+        query="is preventive care covered?",
+        expected_any_sections=("preventive services", "preventive care"),
+        expected_any_answer_terms=("preventive", "covered"),
     ),
     GoldenCase(
         name="no_evidence",
@@ -181,8 +205,7 @@ def validate_case(case: GoldenCase, response: dict[str, Any]) -> list[str]:
         expected in answer for expected in case.expected_any_answer_terms
     ):
         failures.append(
-            "answer did not contain any expected term: "
-            f"{case.expected_any_answer_terms}"
+            f"answer did not contain any expected term: {case.expected_any_answer_terms}"
         )
 
     topics = query_topics(response)

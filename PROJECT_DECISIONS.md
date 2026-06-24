@@ -345,31 +345,34 @@ Live golden checks:
 The golden script requires the local backend, indexed documents, Qdrant, Ollama,
 and supporting services to be running.
 
-Current first golden cases:
+Current golden cases:
 
 - `enrollment`
 - `mental_health_panic`
+- `emergency_panic_attack`
+- `specialist_visit_copay`
+- `prescription_drugs`
+- `preventive_care`
 - `no_evidence`
 
 Observed first run:
 
-- `gemma2:2b`: 3/3 golden checks passed.
-- `qwen3.5:9b`: enrollment check passed.
+- `gemma2:2b`: 7/7 golden checks passed.
+- `qwen3.5:9b`: 7/7 golden checks passed.
 
 ## Pending Slices in Recommended Order
 
 1. Add warmup-aware generation model latency comparison.
-2. Add more golden questions.
-3. Decide whether to optimize generation defaults.
-4. Add optional offline RAGAS adapter.
-5. Add SSE streaming for answer text and live trace events.
-6. Add conversation support with provenance-safe summaries.
-7. Improve ingestion quality metrics: parser coverage, table/form/OCR
+2. Decide whether to optimize generation defaults.
+3. Add optional offline RAGAS adapter.
+4. Add SSE streaming for answer text and live trace events.
+5. Add conversation support with provenance-safe summaries.
+6. Improve ingestion quality metrics: parser coverage, table/form/OCR
     indicators.
-8. Add table/form-aware chunking and retrieval.
-9. Add DOCX/PPTX/XLSX/CSV/HTML support.
-10. Add admin trace list/search page.
-11. Add authentication and tenant isolation after local v1 is stable.
+7. Add table/form-aware chunking and retrieval.
+8. Add DOCX/PPTX/XLSX/CSV/HTML support.
+9. Add admin trace list/search page.
+10. Add authentication and tenant isolation after local v1 is stable.
 
 ## Open Questions
 
@@ -377,6 +380,7 @@ Observed first run:
   optional LLM router in the future?
 - Should human feedback affect reranking manually through evaluation reports
   first, or automatically through ranking rules?
-- What are the first 20 golden questions for evaluation?
+- Which remaining golden questions should be added after retrieval/generation
+  stabilizes?
 - Which document types should be prioritized after PDF/text/Markdown:
   DOCX, XLSX, CSV, HTML, or scanned PDFs?
