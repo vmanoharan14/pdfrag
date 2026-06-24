@@ -187,7 +187,7 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generationModel, setGenerationModel] =
-    useState<GenerationModel>("qwen3.5:9b");
+    useState<GenerationModel>("gemma2:2b");
   const [feedbackByChunk, setFeedbackByChunk] = useState<Record<string, FeedbackLabel>>({});
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [activeCitation, setActiveCitation] = useState<string | null>(null);
@@ -323,8 +323,8 @@ export default function ChatPage() {
                   setGenerationModel(event.target.value as GenerationModel)
                 }
               >
-                <option value="qwen3.5:9b">qwen3.5:9b · default quality</option>
-                <option value="gemma2:2b">gemma2:2b · fast local test</option>
+                <option value="gemma2:2b">gemma2:2b · default fast local</option>
+                <option value="qwen3.5:9b">qwen3.5:9b · quality check</option>
               </select>
             </label>
           </form>

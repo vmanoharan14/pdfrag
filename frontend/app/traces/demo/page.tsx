@@ -58,7 +58,7 @@ const stages = [
   {
     number: "09",
     name: "Answer generation",
-    detail: "qwen3.5:9b · grounded response",
+    detail: "gemma2:2b · grounded response",
     latency: "2.4 s",
     tone: "green",
   },

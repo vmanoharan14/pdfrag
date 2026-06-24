@@ -1,6 +1,6 @@
 # PDFRAG Project Decisions and Findings
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 This file records decisions, findings, and pending implementation slices so the
 project can be resumed without relying on chat memory.
@@ -34,23 +34,28 @@ project can be resumed without relying on chat memory.
 | `nomic-embed-text` | Dense embeddings | Active |
 | `Qdrant/bm25` / local BM25 sparse encoder | Sparse lexical retrieval | Active |
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Reranking | Active |
-| `qwen3.5:9b` | Grounded answer generation | Active |
-| `gemma2:2b` | Optional query router and fast answer-generation test model | Installed/available; router disabled by default locally; selectable for answer A/B tests |
+| `gemma2:2b` | Default local answer generation | Active default for local v1 |
+| `qwen3.5:9b` | Quality-check answer generation | Installed/available; selectable for answer A/B tests |
 
 ## Generation Model Decision
 
-Default answer generation remains `qwen3.5:9b` because quality and citation
-reliability matter more than raw speed.
+Default local answer generation is `gemma2:2b`.
 
-For local latency testing, the chat UI can request `gemma2:2b` per query.
-This is an A/B testing path, not a permanent replacement decision.
+Reason:
+
+- Warmup-aware measured comparison showed both `gemma2:2b` and `qwen3.5:9b`
+  passing the current 7 deterministic golden cases.
+- `gemma2:2b` was materially faster on measured runs.
+- Local v1 needs responsive iteration while keeping `qwen3.5:9b` available for
+  quality checks.
 
 Expected tradeoff:
 
-- `qwen3.5:9b`: slower, stronger answer quality.
-- `gemma2:2b`: faster, likely weaker grounding/citation reliability.
+- `gemma2:2b`: faster default, acceptable on current deterministic goldens.
+- `qwen3.5:9b`: slower, often returns more complete citation coverage.
 
-Evaluate both on the same questions before changing the default.
+Do not treat this as a final production decision. Re-evaluate after more golden
+questions, conversation support, and table/form-aware retrieval are added.
 
 Observed first local A/B check for `how to enroll`:
 
@@ -59,9 +64,24 @@ Observed first local A/B check for `how to enroll`:
 | `gemma2:2b` | about 7.5 seconds | returned `E1`, `E3`, `E4` | faster, but skipped one useful eligibility citation |
 | `qwen3.5:9b` | about 33.1 seconds in this run | returned `E1`, `E2`, `E3`, `E4` | slower, more complete evidence coverage |
 
-This is one local run, not enough for a permanent model decision. Model swapping
-and Ollama load state may affect latency. Continue comparing on the golden
-question set before changing the default.
+This first check was not enough for a permanent model decision because model
+swapping and Ollama load state can distort latency. It led to the
+warmup-aware comparison script below.
+
+Warmup-aware measured comparison on the 7-case golden set:
+
+| Model | Pass rate | Avg elapsed | P95 elapsed | Avg answer generation | P95 answer generation | Decision |
+|---|---:|---:|---:|---:|---:|---|
+| `gemma2:2b` | 7/7 | 2102 ms | 2767 ms | 1117 ms | 1766 ms | Local default |
+| `qwen3.5:9b` | 7/7 | 8110 ms | 14912 ms | 6565 ms | 11470 ms | Quality-check option |
+
+Quality caveat from the same measured report:
+
+- Qwen returned more citations for some cases, for example enrollment and
+  emergency panic attack.
+- Gemma still passed the current deterministic evidence/answer checks.
+- Decision: use Gemma as default for local responsiveness, keep Qwen selectable
+  and continue comparing as the golden set grows.
 
 ## Router Decision
 
@@ -375,16 +395,15 @@ Warmup-aware model comparison:
 
 ## Pending Slices in Recommended Order
 
-1. Decide whether to optimize generation defaults.
-2. Add optional offline RAGAS adapter.
-3. Add SSE streaming for answer text and live trace events.
-4. Add conversation support with provenance-safe summaries.
-5. Improve ingestion quality metrics: parser coverage, table/form/OCR
+1. Add optional offline RAGAS adapter.
+2. Add SSE streaming for answer text and live trace events.
+3. Add conversation support with provenance-safe summaries.
+4. Improve ingestion quality metrics: parser coverage, table/form/OCR
     indicators.
-6. Add table/form-aware chunking and retrieval.
-7. Add DOCX/PPTX/XLSX/CSV/HTML support.
-8. Add admin trace list/search page.
-9. Add authentication and tenant isolation after local v1 is stable.
+5. Add table/form-aware chunking and retrieval.
+6. Add DOCX/PPTX/XLSX/CSV/HTML support.
+7. Add admin trace list/search page.
+8. Add authentication and tenant isolation after local v1 is stable.
 
 ## Open Questions
 

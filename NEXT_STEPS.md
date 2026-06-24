@@ -151,8 +151,8 @@ git commit -m "feat: trace response cache scope"
 - Candidate expansion adds neighboring chunks before reranking.
 - Reranking uses `cross-encoder/ms-marco-MiniLM-L-6-v2`.
 - Answer generation can use per-query model selection:
-  - default `qwen3.5:9b`
-  - optional `gemma2:2b`
+  - default `gemma2:2b` for local responsiveness
+  - optional `qwen3.5:9b` for quality checks
 - Full RAG trace is persisted.
 - `GET /api/traces/{trace_id}` returns stored trace JSON.
 
@@ -160,8 +160,8 @@ git commit -m "feat: trace response cache scope"
 
 - `/chat` calls `/api/chat`.
 - Chat has answer model selector:
-  - Qwen default quality mode
-  - Gemma fast local test mode
+  - Gemma default fast local mode
+  - Qwen quality-check mode
 - Chat shows pipeline trace.
 - Chat links to stored trace.
 - Citations are clickable.
@@ -215,8 +215,8 @@ See `PROJECT_DECISIONS.md` for full detail. Key points:
 - `gemma2:2b` router is disabled by default locally because it added latency
   without changing the path.
 - Deterministic hybrid retrieval is the default.
-- `qwen3.5:9b` remains default generation model for quality.
-- `gemma2:2b` is available as fast local A/B test model.
+- `gemma2:2b` is the local default generation model after measured comparison.
+- `qwen3.5:9b` remains available as a quality-check A/B model.
 - RAGAS is optional offline evaluation only, not request-time.
 - Cache must be scoped safely before being enabled.
 - Local v1 uses fixed server-side principal, not client-supplied auth.
@@ -333,20 +333,30 @@ measured answer generation: 374 ms
 This confirms that first-run latency can be misleading and should not be used
 alone when comparing generation models.
 
-### 1. Decide whether to optimize generation
+### Recently completed: Generation default optimization decision
 
-Possible options:
+Decision:
 
-- lower `generation_num_predict`
-- reduce `context_max_chunks` for simple questions
-- add model-specific defaults:
-  - Qwen quality mode
-  - Gemma fast mode
-- add streaming before further model tuning
+- Use `gemma2:2b` as the local default answer model.
+- Keep `qwen3.5:9b` selectable as quality-check mode.
+- Do not reduce `generation_num_predict` or `context_max_chunks` yet; changing
+  the default model gives a large latency win without weakening retrieval input.
 
-Do not blindly switch default to Gemma until golden results compare quality.
+Measured result from `scripts/compare_generation_models.py`:
 
-### 2. Add optional offline RAGAS adapter
+```text
+qwen3.5:9b | 7/7 | avg elapsed 8110 ms | avg generation 6565 ms
+gemma2:2b  | 7/7 | avg elapsed 2102 ms | avg generation 1117 ms
+```
+
+Quality caveat:
+
+- Qwen returned more citations in some measured cases.
+- Gemma still passed all current deterministic golden checks.
+- Revisit this after the golden set expands and table/form-aware retrieval is
+  added.
+
+### 1. Add optional offline RAGAS adapter
 
 Only after deterministic golden checks are useful.
 
@@ -356,7 +366,7 @@ Rules:
 - Store evaluator model, prompt, metric version, raw rationale.
 - Treat LLM-evaluated scores as directional, not ground truth.
 
-### 3. Add SSE streaming for answer and live trace
+### 2. Add SSE streaming for answer and live trace
 
 Reason:
 
@@ -373,7 +383,7 @@ This is bigger than prior slices; split carefully:
 2. Frontend streaming render.
 3. Live trace event render.
 
-### 4. Conversation support with provenance-safe summaries
+### 3. Conversation support with provenance-safe summaries
 
 Rules:
 
@@ -381,7 +391,7 @@ Rules:
 - Summary can help with user context, but answer still needs retrieved evidence.
 - Store conversation id and summary provenance.
 
-### 5. Ingestion quality metrics
+### 4. Ingestion quality metrics
 
 Add parser/chunking quality signals:
 
@@ -395,7 +405,7 @@ Add parser/chunking quality signals:
 
 Show these in document/ingestion UI.
 
-### 6. Table/form-aware retrieval
+### 5. Table/form-aware retrieval
 
 Later after text RAG stabilizes:
 
@@ -405,7 +415,7 @@ Later after text RAG stabilizes:
 - table summaries
 - row-level expansion
 
-### 7. More document formats
+### 6. More document formats
 
 After PDF/text/Markdown path is stable:
 
@@ -416,7 +426,7 @@ After PDF/text/Markdown path is stable:
 - PPTX
 - scanned PDFs/OCR
 
-### 8. Admin trace list/search page
+### 7. Admin trace list/search page
 
 Add:
 
@@ -427,7 +437,7 @@ Add:
 - filter by question text
 - open trace detail
 
-### 9. Authentication and tenant isolation
+### 8. Authentication and tenant isolation
 
 Defer until local v1 is stable.
 

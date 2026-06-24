@@ -970,7 +970,7 @@ async def search_documents(
             sequence=10,
             stage="context packing",
             status="completed",
-            message="Packed selected evidence into the context that Qwen will receive next.",
+            message="Packed selected evidence into the context for the answer model.",
             duration_ms=0,
             details={},
         )
@@ -996,14 +996,16 @@ async def search_documents(
             sequence=11,
             stage="answer generation",
             status="completed",
-            message="Generated a grounded answer from packed evidence with Qwen.",
+            message="Generating a grounded answer from packed evidence.",
             duration_ms=0,
             details={},
         )
     )
     started_at = time.perf_counter()
     generation_status = "completed"
-    generation_message = "Generated a grounded answer from packed evidence with Qwen."
+    generation_message = (
+        f"Generated a grounded answer from packed evidence with {generation_model}."
+    )
     try:
         generated_answer = await generate_answer(
             query,
