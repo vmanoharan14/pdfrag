@@ -530,6 +530,48 @@ textarea {
   color: #d7eee5;
 }
 
+.latency-card {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.latency-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.latency-grid div {
+  background: #f7faf8;
+  border: 1px solid #e5ece8;
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.latency-grid span,
+.latency-grid strong {
+  display: block;
+}
+
+.latency-grid span {
+  color: #7c8982;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.latency-grid strong {
+  color: var(--ink);
+  font-size: 18px;
+  letter-spacing: -0.03em;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+}
+
 .query-analysis-summary {
   border-top: 1px solid rgba(255, 255, 255, 0.12);
   display: flex;
@@ -1493,6 +1535,10 @@ textarea {
 }
 
 @media (max-width: 980px) {
+  .latency-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .service-grid {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -1546,6 +1592,10 @@ textarea {
   }
 
   .service-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .latency-grid {
     grid-template-columns: 1fr;
   }
 

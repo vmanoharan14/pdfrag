@@ -360,17 +360,16 @@ Observed first run:
 
 1. Add warmup-aware generation model latency comparison.
 2. Add more golden questions.
-3. Improve answer latency visibility in UI.
-4. Decide whether to optimize generation defaults.
-5. Add optional offline RAGAS adapter.
-6. Add SSE streaming for answer text and live trace events.
-7. Add conversation support with provenance-safe summaries.
-8. Improve ingestion quality metrics: parser coverage, table/form/OCR
+3. Decide whether to optimize generation defaults.
+4. Add optional offline RAGAS adapter.
+5. Add SSE streaming for answer text and live trace events.
+6. Add conversation support with provenance-safe summaries.
+7. Improve ingestion quality metrics: parser coverage, table/form/OCR
     indicators.
-9. Add table/form-aware chunking and retrieval.
-10. Add DOCX/PPTX/XLSX/CSV/HTML support.
-11. Add admin trace list/search page.
-12. Add authentication and tenant isolation after local v1 is stable.
+8. Add table/form-aware chunking and retrieval.
+9. Add DOCX/PPTX/XLSX/CSV/HTML support.
+10. Add admin trace list/search page.
+11. Add authentication and tenant isolation after local v1 is stable.
 
 ## Open Questions
 

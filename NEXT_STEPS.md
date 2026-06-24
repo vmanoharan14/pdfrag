@@ -215,6 +215,40 @@ See `PROJECT_DECISIONS.md` for full detail. Key points:
 
 ## Recommended Next Slices
 
+### Current slice in progress: Answer latency summary in Chat UI
+
+Purpose:
+
+- Make latency visible without opening every trace stage.
+- Show whether answer generation, reranking, or retrieval is the bottleneck.
+
+Expected UI after asking a question:
+
+```text
+Latency
+Total
+Retrieval
+Rerank
+Context
+Generation
+Model
+Bottleneck
+```
+
+Validation:
+
+1. Open `/chat`.
+2. Ask `how to enroll`.
+3. Expected: a latency summary card appears below the answer.
+4. Expected: generation is usually the bottleneck.
+5. Expected: selected answer model is visible in the latency card.
+
+Commit message when approved:
+
+```text
+feat: show chat latency summary
+```
+
 ### 1. Add warmup-aware model latency comparison
 
 Reason:
@@ -269,24 +303,7 @@ Add at least:
 
 Keep them deterministic first. Do not add LLM judges yet.
 
-### 3. Improve answer latency visibility in UI
-
-Add a compact latency summary card in `/chat`:
-
-```text
-total latency
-retrieval latency
-rerank latency
-answer generation latency
-selected model
-```
-
-Reason:
-
-- User noticed 6–12 sec latency.
-- Trace has details, but top-level latency should be easier to inspect.
-
-### 4. Decide whether to optimize generation
+### 3. Decide whether to optimize generation
 
 Possible options:
 
@@ -299,7 +316,7 @@ Possible options:
 
 Do not blindly switch default to Gemma until golden results compare quality.
 
-### 5. Add optional offline RAGAS adapter
+### 4. Add optional offline RAGAS adapter
 
 Only after deterministic golden checks are useful.
 
@@ -309,7 +326,7 @@ Rules:
 - Store evaluator model, prompt, metric version, raw rationale.
 - Treat LLM-evaluated scores as directional, not ground truth.
 
-### 6. Add SSE streaming for answer and live trace
+### 5. Add SSE streaming for answer and live trace
 
 Reason:
 
@@ -326,7 +343,7 @@ This is bigger than prior slices; split carefully:
 2. Frontend streaming render.
 3. Live trace event render.
 
-### 7. Conversation support with provenance-safe summaries
+### 6. Conversation support with provenance-safe summaries
 
 Rules:
 
@@ -334,7 +351,7 @@ Rules:
 - Summary can help with user context, but answer still needs retrieved evidence.
 - Store conversation id and summary provenance.
 
-### 8. Ingestion quality metrics
+### 7. Ingestion quality metrics
 
 Add parser/chunking quality signals:
 
@@ -348,7 +365,7 @@ Add parser/chunking quality signals:
 
 Show these in document/ingestion UI.
 
-### 9. Table/form-aware retrieval
+### 8. Table/form-aware retrieval
 
 Later after text RAG stabilizes:
 
@@ -358,7 +375,7 @@ Later after text RAG stabilizes:
 - table summaries
 - row-level expansion
 
-### 10. More document formats
+### 9. More document formats
 
 After PDF/text/Markdown path is stable:
 
@@ -369,7 +386,7 @@ After PDF/text/Markdown path is stable:
 - PPTX
 - scanned PDFs/OCR
 
-### 11. Admin trace list/search page
+### 10. Admin trace list/search page
 
 Add:
 
@@ -380,7 +397,7 @@ Add:
 - filter by question text
 - open trace detail
 
-### 12. Authentication and tenant isolation
+### 11. Authentication and tenant isolation
 
 Defer until local v1 is stable.
 

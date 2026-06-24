@@ -103,6 +103,84 @@ function detailValue(value: unknown) {
   return JSON.stringify(value);
 }
 
+function formatDuration(ms: number) {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
+
+function stageDuration(stages: RetrievalStage[], stageName: string) {
+  return stages.find((stage) => stage.stage === stageName)?.duration_ms ?? 0;
+}
+
+function latencySummary(response: RetrievalResponse) {
+  const dense = stageDuration(response.stages, "dense retrieval");
+  const sparse = stageDuration(response.stages, "sparse retrieval");
+  const fusion = stageDuration(response.stages, "rank fusion");
+  const expansion = stageDuration(response.stages, "candidate expansion");
+  const rerank = stageDuration(response.stages, "rerank");
+  const context = stageDuration(response.stages, "context packing");
+  const generation = stageDuration(response.stages, "answer generation");
+  const total = response.stages.reduce((sum, stage) => sum + stage.duration_ms, 0);
+  const retrieval = dense + sparse + fusion + expansion;
+  const bottleneck =
+    generation >= rerank && generation >= retrieval
+      ? "answer generation"
+      : rerank >= retrieval
+        ? "rerank"
+        : "retrieval";
+
+  return {
+    total,
+    retrieval,
+    rerank,
+    context,
+    generation,
+    bottleneck,
+  };
+}
+
+function LatencySummaryCard({ response }: { response: RetrievalResponse }) {
+  const summary = latencySummary(response);
+
+  return (
+    <section className="latency-card">
+      <div className="section-heading compact">
+        <div>
+          <p className="eyebrow">Latency</p>
+          <h2>Stage timing summary</h2>
+        </div>
+        <small>bottleneck: {summary.bottleneck}</small>
+      </div>
+      <div className="latency-grid">
+        <div>
+          <span>Total</span>
+          <strong>{formatDuration(summary.total)}</strong>
+        </div>
+        <div>
+          <span>Retrieval</span>
+          <strong>{formatDuration(summary.retrieval)}</strong>
+        </div>
+        <div>
+          <span>Rerank</span>
+          <strong>{formatDuration(summary.rerank)}</strong>
+        </div>
+        <div>
+          <span>Context</span>
+          <strong>{formatDuration(summary.context)}</strong>
+        </div>
+        <div>
+          <span>Generation</span>
+          <strong>{formatDuration(summary.generation)}</strong>
+        </div>
+        <div>
+          <span>Model</span>
+          <strong>{response.answer.model}</strong>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function ChatPage() {
   const [query, setQuery] = useState("What does the plan say about infrastructure?");
   const [response, setResponse] = useState<RetrievalResponse | null>(null);
@@ -255,55 +333,61 @@ export default function ChatPage() {
         </section>
 
         {response ? (
-          <section className="answer-card">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Answer</p>
-                <h2>Generated from packed evidence</h2>
-              </div>
-              <small>{response.answer.model}</small>
-            </div>
-            <p>{response.answer.text}</p>
-            <div className="score-row">
-              <Link href={`/traces/${response.trace_id}`}>open stored trace</Link>
-              {response.answer.citation_ids.length ? (
-                <div className="citation-chips" aria-label="Answer citations">
-                  <span>citations</span>
-                  {response.answer.citation_ids.map((id) => (
-                    <button
-                      className={activeCitation === id ? "citation-chip active" : "citation-chip"}
-                      key={id}
-                      type="button"
-                      onClick={() => selectCitation(id)}
-                    >
-                      [{id}]
-                    </button>
-                  ))}
+          <>
+            <section className="answer-card">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Answer</p>
+                  <h2>Generated from packed evidence</h2>
                 </div>
-              ) : (
-                <span>citations —</span>
-              )}
-              <span>{response.answer.prompt_token_estimate} prompt tokens est.</span>
-              <span>{response.answer.prompt_chars} prompt chars</span>
-            </div>
-            <div className="query-analysis-summary">
-              <span>intent: {response.query_analysis.intent.replaceAll("_", " ")}</span>
-              <span>
-                topics:{" "}
-                {response.query_analysis.topics.length
-                  ? response.query_analysis.topics
-                      .map((topic) => topic.replaceAll("_", " "))
-                      .join(", ")
-                  : "none"}
-              </span>
-              {response.query_analysis.expansions.length ? (
-                <details>
-                  <summary>Expanded retrieval terms</summary>
-                  <p>{response.query_analysis.expansions.join(", ")}</p>
-                </details>
-              ) : null}
-            </div>
-          </section>
+                <small>{response.answer.model}</small>
+              </div>
+              <p>{response.answer.text}</p>
+              <div className="score-row">
+                <Link href={`/traces/${response.trace_id}`}>open stored trace</Link>
+                {response.answer.citation_ids.length ? (
+                  <div className="citation-chips" aria-label="Answer citations">
+                    <span>citations</span>
+                    {response.answer.citation_ids.map((id) => (
+                      <button
+                        className={
+                          activeCitation === id ? "citation-chip active" : "citation-chip"
+                        }
+                        key={id}
+                        type="button"
+                        onClick={() => selectCitation(id)}
+                      >
+                        [{id}]
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span>citations —</span>
+                )}
+                <span>{response.answer.prompt_token_estimate} prompt tokens est.</span>
+                <span>{response.answer.prompt_chars} prompt chars</span>
+              </div>
+              <div className="query-analysis-summary">
+                <span>intent: {response.query_analysis.intent.replaceAll("_", " ")}</span>
+                <span>
+                  topics:{" "}
+                  {response.query_analysis.topics.length
+                    ? response.query_analysis.topics
+                        .map((topic) => topic.replaceAll("_", " "))
+                        .join(", ")
+                    : "none"}
+                </span>
+                {response.query_analysis.expansions.length ? (
+                  <details>
+                    <summary>Expanded retrieval terms</summary>
+                    <p>{response.query_analysis.expansions.join(", ")}</p>
+                  </details>
+                ) : null}
+              </div>
+            </section>
+
+            <LatencySummaryCard response={response} />
+          </>
         ) : null}
 
         <section className="trace-results-grid">
