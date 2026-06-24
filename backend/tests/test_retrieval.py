@@ -7,8 +7,18 @@ from app.retrieval import (
     neighbor_indices_for_candidate_payloads,
     parse_retrieved_points,
     reciprocal_rank_fuse,
+    response_cache_scope,
+    response_cache_stage,
     score_to_text,
 )
+
+
+class CacheSettings:
+    dense_embedding_model = "nomic-embed-text:latest"
+    sparse_encoder_model = "qdrant-bm25-local-v1"
+    reranker_model = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    context_max_chars = 4000
+    context_max_chunks = 4
 
 
 def test_parse_retrieved_points_supports_qdrant_query_response() -> None:
@@ -101,3 +111,37 @@ def test_local_security_context_stage_uses_fixed_development_principal() -> None
     assert stage.details["user_id"] == "local-user"
     assert stage.details["principal_id"] == "local-development-principal"
     assert stage.details["acl_filter_applied"] is False
+
+
+def test_response_cache_scope_uses_model_and_hashed_query() -> None:
+    qwen_scope = response_cache_scope(
+        query="How To Enroll",
+        settings=CacheSettings(),  # type: ignore[arg-type]
+        generation_model="qwen3.5:9b",
+    )
+    gemma_scope = response_cache_scope(
+        query="How To Enroll",
+        settings=CacheSettings(),  # type: ignore[arg-type]
+        generation_model="gemma2:2b",
+    )
+
+    assert qwen_scope["query_hash"] == gemma_scope["query_hash"]
+    assert qwen_scope["generation_model"] == "qwen3.5:9b"
+    assert gemma_scope["generation_model"] == "gemma2:2b"
+    assert qwen_scope["cache_key_preview"] != gemma_scope["cache_key_preview"]
+    assert "How To Enroll" not in qwen_scope["cache_key_preview"]
+
+
+def test_response_cache_stage_is_trace_only_for_now() -> None:
+    stage = response_cache_stage(
+        sequence=3,
+        query="how to enroll",
+        settings=CacheSettings(),  # type: ignore[arg-type]
+        generation_model="gemma2:2b",
+    )
+
+    assert stage.stage == "response cache"
+    assert stage.status == "skipped"
+    assert stage.details["cache_enabled"] is False
+    assert stage.details["cache_event"] == "miss"
+    assert stage.details["generation_model"] == "gemma2:2b"

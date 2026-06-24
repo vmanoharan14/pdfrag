@@ -106,6 +106,7 @@ Current request-time pipeline:
 ```text
 query analysis
 security context, fixed local principal in local v1
+response cache, scoped but disabled until safety validation
 intent routing, skipped locally by default
 dense retrieval
 sparse/BM25 retrieval
@@ -141,6 +142,34 @@ auth_source: server_fixed_local_v1
 This is not production authorization. It is a visible placeholder so the query
 pipeline has the correct stage shape before real OIDC, tenant memberships,
 roles, and ACL filters are added.
+
+## Response Cache Decision
+
+Response caching is not enabled yet. The pipeline currently computes and traces
+a safe cache scope/key preview only.
+
+Current local trace stage:
+
+```text
+response cache
+cache_enabled: false
+cache_event: miss
+tenant_id: local-development
+principal_id: local-development-principal
+acl_context: local-placeholder
+query_hash: sha256(normalized query)
+pipeline_version: local-text-rag-v1
+dense_embedding_model
+sparse_encoder_model
+reranker_model
+generation_model
+context budget
+cache_key_preview: first 24 chars of scoped key hash
+```
+
+Do not enable cache reads/writes until cache keys include every value that can
+change the answer, especially tenant/principal/ACL context, document-version
+scope, model identifiers, prompt/pipeline versions, and context budget.
 
 ## Query Expansion Decision
 
@@ -329,18 +358,19 @@ Observed first run:
 
 ## Pending Slices in Recommended Order
 
-1. Add a lightweight evaluation runner for golden questions using
-   deterministic metrics first.
-2. Add optional offline RAGAS adapter.
-3. Add response/cache foundation only after safe cache keys are defined.
-4. Add SSE streaming for answer text and live trace events.
-5. Add conversation support with provenance-safe summaries.
-6. Improve ingestion quality metrics: parser coverage, table/form/OCR
+1. Add warmup-aware generation model latency comparison.
+2. Add more golden questions.
+3. Improve answer latency visibility in UI.
+4. Decide whether to optimize generation defaults.
+5. Add optional offline RAGAS adapter.
+6. Add SSE streaming for answer text and live trace events.
+7. Add conversation support with provenance-safe summaries.
+8. Improve ingestion quality metrics: parser coverage, table/form/OCR
     indicators.
-7. Add table/form-aware chunking and retrieval.
-8. Add DOCX/PPTX/XLSX/CSV/HTML support.
-9. Add admin trace list/search page.
-10. Add authentication and tenant isolation after local v1 is stable.
+9. Add table/form-aware chunking and retrieval.
+10. Add DOCX/PPTX/XLSX/CSV/HTML support.
+11. Add admin trace list/search page.
+12. Add authentication and tenant isolation after local v1 is stable.
 
 ## Open Questions
 

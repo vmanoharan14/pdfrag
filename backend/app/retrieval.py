@@ -1,3 +1,5 @@
+import hashlib
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -46,6 +48,7 @@ EXPANSION_SEED_LIMIT = 6
 LOCAL_TENANT_ID = "local-development"
 LOCAL_USER_ID = "local-user"
 LOCAL_PRINCIPAL_ID = "local-development-principal"
+RETRIEVAL_PIPELINE_VERSION = "local-text-rag-v1"
 
 
 class RetrievalRequest(BaseModel):
@@ -204,6 +207,66 @@ def local_security_context_stage(sequence: int, duration_ms: int = 0) -> Retriev
             "acl_mode": "local_placeholder",
             "acl_filter_applied": False,
             "auth_source": "server_fixed_local_v1",
+        },
+    )
+
+
+def selected_generation_model(request: RetrievalRequest, settings: Settings) -> str:
+    return request.generation_model or settings.generation_model
+
+
+def response_cache_scope(
+    *,
+    query: str,
+    settings: Settings,
+    generation_model: str,
+) -> dict[str, Any]:
+    query_hash = hashlib.sha256(query.strip().lower().encode("utf-8")).hexdigest()
+    scope = {
+        "tenant_id": LOCAL_TENANT_ID,
+        "principal_id": LOCAL_PRINCIPAL_ID,
+        "acl_context": "local-placeholder",
+        "query_hash": query_hash,
+        "pipeline_version": RETRIEVAL_PIPELINE_VERSION,
+        "dense_embedding_model": settings.dense_embedding_model,
+        "sparse_encoder_model": settings.sparse_encoder_model,
+        "reranker_model": settings.reranker_model,
+        "generation_model": generation_model,
+        "context_max_chars": settings.context_max_chars,
+        "context_max_chunks": settings.context_max_chunks,
+    }
+    cache_key_material = json.dumps(scope, sort_keys=True, separators=(",", ":"))
+    return {
+        **scope,
+        "cache_key_preview": hashlib.sha256(
+            cache_key_material.encode("utf-8")
+        ).hexdigest()[:24],
+    }
+
+
+def response_cache_stage(
+    sequence: int,
+    *,
+    query: str,
+    settings: Settings,
+    generation_model: str,
+    duration_ms: int = 0,
+) -> RetrievalStage:
+    return RetrievalStage(
+        sequence=sequence,
+        stage="response cache",
+        status="skipped",
+        message="Response cache is scoped but disabled until cache safety is validated.",
+        duration_ms=duration_ms,
+        details={
+            "cache_enabled": False,
+            "cache_event": "miss",
+            "reason": "cache read/write disabled during local validation",
+            **response_cache_scope(
+                query=query,
+                settings=settings,
+                generation_model=generation_model,
+            ),
         },
     )
 
@@ -725,6 +788,7 @@ async def search_documents(
         raise HTTPException(status_code=422, detail="Query cannot be blank.")
 
     settings = get_settings()
+    generation_model = selected_generation_model(request, settings)
     started_at = time.perf_counter()
     analysis = analyze_query(query)
     stages: list[RetrievalStage] = [
@@ -748,10 +812,21 @@ async def search_documents(
     stages.append(local_security_context_stage(sequence=2, duration_ms=elapsed_ms(started_at)))
 
     started_at = time.perf_counter()
+    stages.append(
+        response_cache_stage(
+            sequence=3,
+            query=query,
+            settings=settings,
+            generation_model=generation_model,
+            duration_ms=elapsed_ms(started_at),
+        )
+    )
+
+    started_at = time.perf_counter()
     router_decision = await route_query(query, analysis, settings)
     stages.append(
         RetrievalStage(
-            sequence=3,
+            sequence=4,
             stage="intent routing",
             status=(
                 "completed"
@@ -790,7 +865,7 @@ async def search_documents(
         dense_details["stale_discarded"] = raw_dense_count - len(dense_points)
         stages.append(
             RetrievalStage(
-                sequence=4,
+                sequence=5,
                 stage="dense retrieval",
                 status="completed",
                 message="Retrieved semantic candidates and kept active DB chunks.",
@@ -807,7 +882,7 @@ async def search_documents(
         sparse_details["stale_discarded"] = raw_sparse_count - len(sparse_points)
         stages.append(
             RetrievalStage(
-                sequence=5,
+                sequence=6,
                 stage="sparse retrieval",
                 status="completed",
                 message="Retrieved lexical candidates and kept active DB chunks.",
@@ -822,7 +897,7 @@ async def search_documents(
     fused = reciprocal_rank_fuse(dense_points, sparse_points)
     stages.append(
         RetrievalStage(
-            sequence=6,
+            sequence=7,
             stage="rank fusion",
             status="completed",
             message="Fused dense and sparse rankings using reciprocal rank fusion.",
@@ -840,7 +915,7 @@ async def search_documents(
     ranked, expansion_details = await expand_candidates_with_neighbors(session, fused)
     stages.append(
         RetrievalStage(
-            sequence=7,
+            sequence=8,
             stage="candidate expansion",
             status="completed",
             message="Added neighboring chunks around fused candidates before reranking.",
@@ -881,7 +956,7 @@ async def search_documents(
         }
     stages.append(
         RetrievalStage(
-            sequence=8,
+            sequence=9,
             stage="rerank",
             status=reranker_status,
             message=reranker_message,
@@ -892,7 +967,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=9,
+            sequence=10,
             stage="context packing",
             status="completed",
             message="Packed selected evidence into the context that Qwen will receive next.",
@@ -918,7 +993,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=10,
+            sequence=11,
             stage="answer generation",
             status="completed",
             message="Generated a grounded answer from packed evidence with Qwen.",
@@ -934,7 +1009,7 @@ async def search_documents(
             query,
             packed_context,
             settings,
-            generation_model=request.generation_model,
+            generation_model=generation_model,
         )
         generation_details = {
             "model": generated_answer.model,
@@ -964,7 +1039,7 @@ async def search_documents(
 
     stages.append(
         RetrievalStage(
-            sequence=11,
+            sequence=12,
             stage="evidence preview",
             status="completed",
             message="Returned answer, top evidence chunks, and packed context.",

@@ -149,6 +149,7 @@ def validate_case(case: GoldenCase, response: dict[str, Any]) -> list[str]:
     required_stages = (
         "query analysis",
         "security context",
+        "response cache",
         "intent routing",
         "dense retrieval",
         "sparse retrieval",
