@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 MAX_CHUNK_CHARS = 1800
 OVERLAP_CHARS = 220
+KV_LINE_RATIO = 0.6  # fraction of lines that must look like "Key: value" to call it a form
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,91 @@ def is_table_block(block: str) -> bool:
     return any(set(line.replace("|", "").strip()) <= {"-", ":", " "} for line in pipe_lines)
 
 
+def is_form_block(block: str) -> bool:
+    """Return True when the majority of lines look like key: value pairs."""
+    lines = [line.strip() for line in block.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return False
+    kv_pattern = re.compile(r"^\*{0,2}[\w][\w\s/()-]{1,60}\*{0,2}:\s+\S")
+    kv_count = sum(1 for line in lines if kv_pattern.match(line))
+    return kv_count / len(lines) >= KV_LINE_RATIO
+
+
+def _classify_block(content: str) -> str:
+    if is_table_block(content):
+        return "table"
+    if is_form_block(content):
+        return "form"
+    return "prose"
+
+
+def normalize_table_markdown(block: str) -> str:
+    """Compact docling's wide markdown tables.
+
+    Docling pads every cell to match its widest content, producing separator
+    rows with hundreds of dashes and data rows with trailing spaces.  This
+    crushes the cross-encoder's token budget before it reaches the actual values.
+    We strip cell padding and collapse separator rows to `---`.
+    """
+    lines = block.splitlines()
+    normalized: list[str] = []
+    for line in lines:
+        if not line.startswith("|"):
+            normalized.append(line)
+            continue
+        raw_cells = line.split("|")
+        # split produces ['', cell, cell, ..., ''] — drop empty outer elements
+        cells = [c.strip() for c in raw_cells[1:-1]] if len(raw_cells) >= 3 else [line]
+        is_separator = all(
+            set(c.replace("-", "").replace(":", "").replace(" ", "")) == set()
+            for c in cells
+        )
+        if is_separator:
+            normalized.append("| " + " | ".join(["---"] * len(cells)) + " |")
+        else:
+            normalized.append("| " + " | ".join(cells) + " |")
+    return "\n".join(normalized)
+
+
+def split_large_table(block: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
+    """Split an oversized markdown table by row groups, repeating the header on each part."""
+    if len(block) <= max_chars:
+        return [block]
+
+    lines = block.splitlines()
+    separator_idx: int | None = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("|") and set(stripped.replace("|", "").strip()) <= {"-", ":", " "}:
+            separator_idx = i
+            break
+
+    if separator_idx is None or separator_idx + 1 >= len(lines):
+        return [block]
+
+    header = "\n".join(lines[: separator_idx + 1])
+    data_rows = lines[separator_idx + 1 :]
+
+    parts: list[str] = []
+    current_rows: list[str] = []
+    current_len = len(header)
+
+    for row in data_rows:
+        row_len = len(row) + 1  # +1 for the newline
+        if current_rows and current_len + row_len > max_chars:
+            parts.append(header + "\n" + "\n".join(current_rows))
+            current_rows = [row]
+            current_len = len(header) + row_len
+        else:
+            current_rows.append(row)
+            current_len += row_len
+
+    if current_rows:
+        parts.append(header + "\n" + "\n".join(current_rows))
+
+    return parts or [block]
+
+
 def split_large_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
     text = text.strip()
     if not text:
@@ -76,8 +162,7 @@ def blockify_markdown(markdown: str) -> list[tuple[str | None, str, str]]:
         nonlocal buffer
         content = "\n".join(buffer).strip()
         if content:
-            element_type = "table" if is_table_block(content) else "prose"
-            blocks.append((current_section, element_type, content))
+            blocks.append((current_section, _classify_block(content), content))
         buffer = []
 
     for line in markdown.splitlines():
@@ -94,6 +179,10 @@ def blockify_markdown(markdown: str) -> list[tuple[str | None, str, str]]:
 
     flush()
     return blocks
+
+
+def _context_prefix(section_title: str | None) -> str:
+    return f"{section_title}\n\n" if section_title else ""
 
 
 def chunk_markdown(markdown: str) -> list[ChunkCandidate]:
@@ -127,23 +216,35 @@ def chunk_markdown(markdown: str) -> list[ChunkCandidate]:
         prose_buffer = []
         prose_section = None
 
-    for section_title, element_type, block in blockify_markdown(markdown):
+    def emit_structured(section_title: str | None, element_type: str, block: str) -> None:
+        """Emit one or more chunks for a table or form block."""
+        prefix = _context_prefix(section_title)
         if element_type == "table":
-            flush_prose()
+            block = normalize_table_markdown(block)
+        parts = split_large_table(block) if element_type == "table" else [block]
+        for i, part in enumerate(parts):
+            content = prefix + part
             candidates.append(
                 ChunkCandidate(
                     chunk_index=len(candidates),
-                    content=block,
-                    token_estimate=estimate_tokens(block),
+                    content=content,
+                    token_estimate=estimate_tokens(content),
                     section_title=section_title,
-                    element_type="table",
+                    element_type=element_type,
                     metadata={
                         "chunker": "markdown-layout-v1",
-                        "characters": len(block),
+                        "characters": len(content),
                         "overlap_chars": 0,
+                        "part_index": i,
+                        "part_total": len(parts),
                     },
                 )
             )
+
+    for section_title, element_type, block in blockify_markdown(markdown):
+        if element_type in ("table", "form"):
+            flush_prose()
+            emit_structured(section_title, element_type, block)
             continue
 
         proposed = "\n\n".join([*prose_buffer, block])

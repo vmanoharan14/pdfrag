@@ -106,6 +106,8 @@ export default function SearchPage() {
   const [streamDone, setStreamDone] = useState<StreamDone | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const tokenBufRef = useRef("");
+  const rafRef = useRef<number | null>(null);
 
   const lastStage = liveStages[liveStages.length - 1];
   const statusLabel =
@@ -126,6 +128,11 @@ export default function SearchPage() {
     setLiveContext(null);
     setStreamText("");
     setStreamDone(null);
+    tokenBufRef.current = "";
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
 
     try {
       const res = await fetch(`${backendUrl}/api/chat/stream`, {
@@ -162,8 +169,15 @@ export default function SearchPage() {
             setLiveStages((p) => [...p, data as unknown as RetrievalStage]);
           else if (eventType === "context")
             setLiveContext(data as unknown as StreamedContext);
-          else if (eventType === "token")
-            setStreamText((p) => p + String(data.text ?? ""));
+          else if (eventType === "token") {
+            tokenBufRef.current += String(data.text ?? "");
+            if (rafRef.current === null) {
+              rafRef.current = requestAnimationFrame(() => {
+                setStreamText(tokenBufRef.current);
+                rafRef.current = null;
+              });
+            }
+          }
           else if (eventType === "done")
             setStreamDone(data as unknown as StreamDone);
         }
@@ -193,6 +207,11 @@ export default function SearchPage() {
     setLiveContext(null);
     setError(null);
     setQuery("");
+    tokenBufRef.current = "";
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
     setTimeout(() => inputRef.current?.focus(), 0);
   }
 

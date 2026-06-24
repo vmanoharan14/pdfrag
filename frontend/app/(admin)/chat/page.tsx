@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import Link from "next/link";
 
 type RetrievalStage = {
@@ -191,6 +191,8 @@ export default function ChatPage() {
   const [liveStages, setLiveStages] = useState<RetrievalStage[]>([]);
   const [liveContext, setLiveContext] = useState<StreamedContext | null>(null);
   const [streamDone, setStreamDone] = useState<StreamDone | null>(null);
+  const tokenBufRef = useRef("");
+  const rafRef = useRef<number | null>(null);
 
   // Cache state
   const [cacheClearing, setCacheClearing] = useState(false);
@@ -219,6 +221,11 @@ export default function ChatPage() {
     setFeedbackByChunk({});
     setFeedbackError(null);
     setActiveCitation(null);
+    tokenBufRef.current = "";
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
 
     try {
       const apiResponse = await fetch(`${backendUrl}/api/chat/stream`, {
@@ -255,7 +262,13 @@ export default function ChatPage() {
           } else if (eventType === "context") {
             setLiveContext(data as unknown as StreamedContext);
           } else if (eventType === "token") {
-            setStreamText((prev) => prev + String(data.text ?? ""));
+            tokenBufRef.current += String(data.text ?? "");
+            if (rafRef.current === null) {
+              rafRef.current = requestAnimationFrame(() => {
+                setStreamText(tokenBufRef.current);
+                rafRef.current = null;
+              });
+            }
           } else if (eventType === "done") {
             setStreamDone(data as unknown as StreamDone);
           }
