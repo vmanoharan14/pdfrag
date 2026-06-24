@@ -165,31 +165,53 @@ roles, and ACL filters are added.
 
 ## Response Cache Decision
 
-Response caching is not enabled yet. The pipeline currently computes and traces
-a safe cache scope/key preview only.
+A two-tier response cache is active.
 
-Current local trace stage:
+**Tier 1 — Exact hash cache (PostgreSQL `response_cache`)**
+
+Cache key: SHA-256(normalized query + tenant_id + generation model + pipeline version).
+
+- No embedding needed on a hit.
+- `created_at` and `hit_count` tracked per entry.
+- Context snapshot stored alongside answer and citation_ids.
+
+Alembic migration: `0008_response_cache.py`.
+
+**Tier 2 — Semantic cache (Qdrant `pdfrag_response_cache_v1`)**
+
+On exact miss, embed the query with `nomic-embed-text` (768-dim) and search
+Qdrant with cosine similarity threshold **0.93**.
+
+Threshold history and rationale:
+- Started at 0.93 — too strict, genuine paraphrases never reached it.
+- Lowered to 0.75 — caused false positives: "chest pain" vs "head pain" scored
+  0.84, "specialist copay" vs "emergency copay" scored 0.86, "outpatient surgery"
+  vs "inpatient surgery" scored 0.93. All different questions with different answers.
+- Raised back to 0.93 — only near-identical rephrasing hits. Insurance domain
+  queries share sentence structure, making the gap between paraphrase and
+  different-question scores too small for a lower threshold to be safe.
+
+- Qdrant point IDs are deterministic UUIDs: `uuid.uuid5(NAMESPACE_DNS, cache_key)`.
+- Payload stores `cache_key`, `tenant_id`, and original `query`.
+- On a semantic hit, the full answer is fetched from PostgreSQL using the returned key.
+- The query embedding is reused when writing the new cache entry to avoid
+  a second embed call.
+
+Cache management:
 
 ```text
-response cache
-cache_enabled: false
-cache_event: miss
-tenant_id: local-development
-principal_id: local-development-principal
-acl_context: local-placeholder
-query_hash: sha256(normalized query)
-pipeline_version: local-text-rag-v1
-dense_embedding_model
-sparse_encoder_model
-reranker_model
-generation_model
-context budget
-cache_key_preview: first 24 chars of scoped key hash
+GET  /api/cache  → {entries, total_hits, semantic_entries}
+DELETE /api/cache → {deleted, semantic_deleted}
 ```
 
-Do not enable cache reads/writes until cache keys include every value that can
-change the answer, especially tenant/principal/ACL context, document-version
-scope, model identifiers, prompt/pipeline versions, and context budget.
+CORS must include DELETE for the browser clear-cache button to work.
+
+On cache hit, the SSE endpoint emits three stage events (query analysis, security
+context, response cache) and then a `done` event with `from_cache: true`. No
+pipeline trace is saved on a cache hit.
+
+Do not serve cached answers across different tenants or pipeline versions.
+Extend cache key scope before enabling multi-tenant use.
 
 ## Query Expansion Decision
 
@@ -301,29 +323,62 @@ The trace page shows:
 
 ## API Decision
 
-The plan calls for:
-
-```text
-POST /api/chat
-```
-
-The project originally implemented:
-
-```text
-POST /api/retrieval/search
-```
+The plan originally called for `POST /api/chat`. The project first implemented
+`POST /api/retrieval/search`.
 
 Current decision:
 
-- Keep `/api/retrieval/search` for the retrieval workbench.
-- Add `/api/chat` as the plan-aligned API endpoint.
-- `/api/chat` should delegate to the same pipeline to avoid duplicate logic.
+- `/api/chat` has been removed. It was a blocking JSON endpoint.
+- `/api/chat/stream` is the primary chat endpoint — SSE `text/event-stream`.
+- `/api/retrieval/search` remains for the retrieval workbench and golden scripts.
+- `/api/cache` (GET / DELETE) manages the two-tier response cache.
 
-Implementation status:
+SSE event types:
 
-- `/api/chat` is implemented.
-- The chat UI calls `/api/chat`.
-- `/api/retrieval/search` remains available.
+```text
+stage   — one per pipeline stage as it completes (real-time)
+context — packed context blocks before generation
+token   — one per generated answer token
+done    — final: answer, citation_ids, trace_id, retrieval_mode, from_cache, cached_at
+```
+
+Implementation notes:
+
+- Real-time stages use `asyncio.Queue` + `asyncio.create_task`; pipeline runs in
+  background and puts stages on the queue as they complete.
+- `on_stage: Callable[[RetrievalStage], Awaitable[None]]` is the callback contract.
+- `scripts/run_golden_queries.py` calls `/api/retrieval/search` (synchronous,
+  not SSE) — do not change this.
+- `retrieval_mode` from the router decision propagates through the SSE path and
+  is stored in the cache entry.
+
+## SSE Streaming Decision
+
+The blocking `POST /api/chat` endpoint was replaced with a streaming SSE endpoint
+`POST /api/chat/stream` (`text/event-stream`).
+
+Reason:
+
+- Even at 2–8 seconds total, streaming makes the response feel instant because
+  the user sees stages and tokens as they arrive.
+- Blocking JSON response required waiting for full pipeline completion before
+  anything was rendered.
+
+Real-time stage implementation:
+
+- `on_stage` callback added to `run_pipeline_to_context` with signature
+  `Callable[[RetrievalStage], Awaitable[None]] | None`.
+- `asyncio.Queue[RetrievalStage | None]` bridges the pipeline coroutine and the
+  SSE generator.
+- `asyncio.create_task` runs the pipeline concurrently; the SSE generator drains
+  the queue until the `None` sentinel arrives.
+- This avoids buffering: stages appear in the UI the moment each step finishes.
+
+Known constraint:
+
+- `asyncio.Queue` requires the SSE generator and pipeline to run on the same
+  event loop. This works with FastAPI's default single-process dev server and
+  Uvicorn's default asyncio loop. Review if switching to a multi-process worker.
 
 ## Ingestion Quality Metrics Decision
 
@@ -414,15 +469,51 @@ Warmup-aware model comparison:
   - measured answer generation: 374 ms
 - Decision: do not compare generation models using first-run latency alone.
 
+## Reranker Performance Decision
+
+MiniLM-L6 cross-encoder runs on CPU. Default PyTorch settings caused it to be
+the pipeline bottleneck at 1,400–2,200 ms per query.
+
+Root causes found and fixed:
+
+| Parameter | Before | After | Reason |
+|---|---|---|---|
+| `RERANK_BATCH_SIZE` | 8 | 32 | Eliminates 2–3 forward passes; all 14–18 candidates in one pass |
+| `torch.set_num_threads` | 24 (default) | 4 | 24 threads caused scheduling contention for this small model — biggest win |
+| `max_length` | 512 | **kept at 512** | Tested 256 — broke `no_evidence` golden case (reranker needs full context to correctly score irrelevant chunks as very negative) |
+
+Result: reranking **1,400–2,200 ms → ~1,000 ms**. Golden suite 7/7 passes.
+
+`max_length=256` finding: all chunks average 387 tokens (1,549 chars). Some chunks
+are massive (48K chars, ~12K tokens — pipe-formatted tables / TOC). Truncation at
+256 caused the "lunar habitat repairs" no-evidence query to rank a "reimbursement"
+chunk too high, leading the LLM to hallucinate a tangential answer. 512 keeps the
+negative rerank scores deep enough that the LLM correctly refuses.
+
+## Completed Slices (summary)
+
+1. Dense + sparse hybrid retrieval with RRF fusion.
+2. Candidate expansion and MiniLM reranking.
+3. Full RAG trace persistence and visual trace page.
+4. Deterministic golden evaluation suite (7 cases).
+5. Warmup-aware model latency comparison script.
+6. `gemma2:2b` as default generation model.
+7. Ingestion quality metrics UI (observability only).
+8. SSE streaming endpoint (`/api/chat/stream`) with real-time stages and token streaming.
+9. Two-tier response cache: exact hash (PostgreSQL) + semantic (Qdrant 0.93 threshold).
+10. Clear cache UI button and `DELETE /api/cache` endpoint.
+11. `retrieval_mode` propagated through SSE path and stored in cache.
+12. Semantic cache threshold set to 0.93 after false positive analysis (chest pain vs head pain, specialist vs emergency copay).
+13. Reranker CPU tuning: batch=32, threads=4 → rerank 1,400–2,200 ms → ~1,000 ms.
+
 ## Pending Slices in Recommended Order
 
-1. Improve ingestion quality metrics: parser coverage, table/form/OCR
-    indicators.
-2. Add table/form-aware chunking and retrieval.
-3. Add conversation support with provenance-safe summaries.
-4. Add SSE streaming for answer text and live trace events.
-5. Add DOCX/PPTX/XLSX/CSV/HTML support.
-6. Add admin trace list/search page.
+1. Add table/form-aware chunking and retrieval.
+2. Add conversation support with provenance-safe summaries.
+3. Add DOCX/PPTX/XLSX/CSV/HTML support.
+4. Add admin trace list/search page.
+5. Feedback-driven reranking (votes stored but not yet used).
+6. Document routing / filtering (UHC vs NJ Transit plan bleed).
 7. Add authentication and tenant isolation after local v1 is stable.
 8. Add optional offline RAGAS adapter.
 

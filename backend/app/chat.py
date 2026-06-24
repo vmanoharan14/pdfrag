@@ -12,6 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.database import get_session
 from app.generation import extract_citation_ids, stream_answer_tokens
+from app.cache import semantic_cache_lookup, write_semantic_cache_entry
+from app.indexing import embed_texts_adaptive
+from app.models import ResponseCache
 from app.retrieval import PipelineContext, RetrievalRequest, RetrievalStage, persist_stream_trace, read_response_cache, result_from_candidate, run_pipeline_to_context, write_response_cache
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -30,11 +33,24 @@ async def _stream_chat(
     query = request.query.strip()
     generation_model = request.generation_model or settings.generation_model
 
-    # Check cache before running the full pipeline.
+    # 1. Exact hash cache lookup (no embedding needed).
     cached, cache_key = await read_response_cache(
         session, query=query, settings=settings, generation_model=generation_model
     )
+
+    # 2. Semantic cache lookup on exact miss — embed query and search Qdrant.
+    query_embedding: list[float] | None = None
+    if not cached:
+        query_embedding = (await embed_texts_adaptive([query], settings))[0]
+        semantic_key = await semantic_cache_lookup(query_embedding, settings)
+        if semantic_key:
+            cached = await session.get(ResponseCache, semantic_key)
+            if cached:
+                cached.hit_count += 1
+                await session.commit()
+
     if cached:
+        cache_type = "exact" if query_embedding is None else "semantic"
         yield _sse("stage", RetrievalStage(
             sequence=1, stage="query analysis", status="completed",
             message="Analyzed the question and expanded retrieval terms.",
@@ -47,8 +63,8 @@ async def _stream_chat(
         ).model_dump())
         yield _sse("stage", RetrievalStage(
             sequence=3, stage="response cache", status="completed",
-            message=f"Cache hit — served from cache (hit #{cached.hit_count}).",
-            duration_ms=0, details={"cache_enabled": True, "cache_event": "hit", "hit_count": cached.hit_count},
+            message=f"{cache_type.capitalize()} cache hit — served from cache (hit #{cached.hit_count}).",
+            duration_ms=0, details={"cache_enabled": True, "cache_event": "hit", "cache_type": cache_type, "hit_count": cached.hit_count},
         ).model_dump())
         yield _sse("context", cached.context_snapshot)
         yield _sse("done", {
@@ -166,6 +182,10 @@ async def _stream_chat(
         generation_model=generation_model,
         context_snapshot=context_snapshot,
     )
+    # Embed query (reuse embedding if already computed during cache miss check)
+    if query_embedding is None:
+        query_embedding = (await embed_texts_adaptive([query], settings))[0]
+    await write_semantic_cache_entry(cache_key, query, query_embedding, settings)
     await persist_stream_trace(
         session,
         pipeline=pipeline_result,

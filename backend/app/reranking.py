@@ -8,7 +8,10 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from app.config import Settings
 
-RERANK_BATCH_SIZE = 8
+RERANK_BATCH_SIZE = 32
+# MiniLM-L6 is small — more than 4 threads adds scheduling overhead on CPU.
+# 24 threads (PyTorch default) is ~4x slower than 4 threads for this model.
+RERANK_NUM_THREADS = 4
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ def score_pairs_sync(
         settings.reranker_local_files_only,
     )
     scores: list[RerankScore] = []
+    torch.set_num_threads(RERANK_NUM_THREADS)
 
     with torch.inference_mode():
         for start in range(0, len(items), RERANK_BATCH_SIZE):

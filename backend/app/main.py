@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.cache import router as cache_router
+from app.cache import ensure_semantic_cache_collection, router as cache_router
 from app.chat import router as chat_router
 from app.config import get_settings
 from app.documents import router as documents_router
@@ -14,7 +14,8 @@ from app.traces import router as traces_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    get_settings()
+    settings = get_settings()
+    await ensure_semantic_cache_collection(settings)
     yield
 
 

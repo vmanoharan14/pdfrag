@@ -119,7 +119,7 @@ Latency is a first-class requirement, not an afterthought.
 | ACL filter lookup | <= 100 ms |
 | Dense + BM25 retrieval + fusion | <= 500 ms |
 | Candidate expansion | <= 150 ms |
-| Reranking | <= 700 ms |
+| Reranking | <= 700 ms (currently ~1,000 ms locally; see reranker tuning note) |
 | Context packing | <= 150 ms |
 | First token latency | <= 3 seconds |
 | Full answer latency for normal questions | <= 8 seconds |
@@ -243,10 +243,12 @@ Use Docker Compose locally for PostgreSQL, Qdrant, Redis, and MinIO only. Run Ol
 
 When a user asks a question:
 
-1. `POST /api/chat` receives a question, optional conversation id, and optional filters.
+1. `POST /api/chat/stream` receives a question, optional conversation id, and optional filters.
+   Returns `text/event-stream` (SSE) with real-time stage, context, token, and done events.
    - Local v1 uses a fixed development principal and tenant context supplied by trusted server configuration.
    - Do not expose client-controlled tenant or ACL identifiers.
    - Add verified OIDC claims and full tenant isolation in a later security milestone.
+   - Check exact response cache (hash) then semantic cache (Qdrant 0.93) before running the pipeline.
 2. Create `trace_id`.
 3. Build ACL/RBAC filter before retrieval.
 4. Normalize query:
@@ -364,7 +366,9 @@ Returns:
 - warnings
 - errors
 
-### `POST /api/chat`
+### `POST /api/chat/stream`
+
+SSE endpoint (`text/event-stream`). Replaces the original blocking `POST /api/chat`.
 
 Input:
 
@@ -372,16 +376,27 @@ Input:
 - optional conversation id
 - optional filters
 
-Output:
+SSE events emitted:
 
-- answer
-- citations
-- trace id
-- evidence status
+- `stage` — one per pipeline stage as it completes
+- `context` — packed context blocks before generation
+- `token` — one per generated answer token
+- `done` — final: answer, citation_ids, trace_id, retrieval_mode, from_cache, cached_at
+
+Checks exact response cache then semantic cache before running the pipeline.
+No pipeline trace is saved on a cache hit.
 
 Authentication middleware supplies the effective user, tenant, roles, and permissions. These values are not accepted as authoritative request fields.
 
 For local v1, the server substitutes a fixed development principal. The API contract must not require clients to submit authoritative identity or tenant fields.
+
+### `GET /api/cache` / `DELETE /api/cache`
+
+Manage the two-tier response cache.
+
+- `GET` returns `{entries, total_hits, semantic_entries}`.
+- `DELETE` clears PostgreSQL `response_cache` table and all Qdrant points in
+  `pdfrag_response_cache_v1` for the local tenant.
 
 ### `GET /api/traces/{trace_id}`
 
@@ -413,6 +428,7 @@ Streams original file or extracted artifact if authorized.
 - feedback
 - eval_case
 - eval_run
+- response_cache (exact cache: cache_key, query, answer, citation_ids, retrieval_mode, generation_model, context_snapshot, hit_count)
 
 ---
 
@@ -538,8 +554,9 @@ Build the system as vertical, testable increments.
 - PDF/text/Markdown ingestion.
 - PostgreSQL metadata, object storage, Qdrant dense + BM25 vectors.
 - `nomic-embed-text`, Qdrant BM25, MiniLM reranking, `gemma2:2b` routing, and `qwen3.5:9b`.
-- SSE streaming for answers and live trace events.
-- Answer citations and a minimal per-question trace.
+- SSE streaming for answers and live trace events. ✓ Implemented (`/api/chat/stream`).
+- Two-tier response cache: exact hash (PostgreSQL) + semantic (Qdrant). ✓ Implemented.
+- Answer citations and a minimal per-question trace. ✓ Implemented.
 - Core ACL, retrieval, grounding, and latency tests.
 
 ### Milestone 2: Durable Ingestion and Enterprise Formats
