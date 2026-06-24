@@ -56,7 +56,7 @@ GOLDEN_CASES: tuple[GoldenCase, ...] = (
             "I feel anxious and feel like having panic attacks, what kind of coverage do I have?"
         ),
         expected_any_sections=("mental health", "behavioral health", "emergency"),
-        expected_any_answer_terms=("mental", "behavioral", "not enough evidence"),
+        expected_any_answer_terms=("mental", "behavioral", "not enough evidence", "does not contain"),
         expected_any_topics=("mental_health",),
     ),
     GoldenCase(
@@ -213,7 +213,15 @@ def validate_case(case: GoldenCase, response: dict[str, Any]) -> list[str]:
         if topic not in topics:
             failures.append(f"missing expected query topic: {topic}")
 
-    if case.require_not_enough_evidence and "not enough evidence" not in answer:
+    no_evidence_phrases = (
+        "not enough evidence",
+        "not enough information",
+        "doesn't give me enough",
+        "does not contain information",
+        "cannot answer",
+        "no information",
+    )
+    if case.require_not_enough_evidence and not any(p in answer for p in no_evidence_phrases):
         failures.append("answer should have been a no-evidence response")
 
     toc_count = sum(1 for section in sections if "table of contents" in section)

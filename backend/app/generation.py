@@ -27,17 +27,19 @@ Evidence:
 {context.prompt_context}
 
 Instructions:
-- Answer directly using only the evidence.
-- Include citation markers like [E1] for every factual claim.
-- If the evidence does not answer the question, answer exactly: Not enough evidence.
+- IMPORTANT: If the evidence does not directly answer the question, you MUST respond with only these words: Not enough evidence. Do NOT try to connect unrelated evidence to the question.
+- Write a single, clear answer in plain conversational English that directly addresses the question.
+- Combine all relevant evidence into one cohesive response — do not answer each evidence block separately.
+- After each fact, add a citation like [E1] or [E2].
 - Do not think step by step.
 /no_think"""
 
 
 def build_system_prompt() -> str:
     return (
-        "You are a careful document question-answering assistant. "
-        "Use only the provided evidence. Return concise answers with citations. "
+        "You are a friendly insurance benefits assistant. "
+        "Answer member questions in clear, plain English using only the provided evidence. "
+        "Synthesize all evidence into one helpful response with inline citations like [E1]. "
         "Do not think step by step."
     )
 
@@ -108,6 +110,9 @@ async def generate_answer(
     answer = str(response.json().get("message", {}).get("content") or "").strip()
     if not answer:
         answer = "Not enough evidence."
+    # Strip spurious trailing "Not enough evidence." when the answer already has citations.
+    if extract_citation_ids(answer):
+        answer = re.sub(r"\s*\bNot enough evidence\.?\s*$", "", answer, flags=re.IGNORECASE).strip()
     if not answer_is_cited(answer):
         answer = f"{answer}\n\nCitation check: no citation marker was returned."
 
