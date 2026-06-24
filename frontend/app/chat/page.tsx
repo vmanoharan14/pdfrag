@@ -82,6 +82,22 @@ type PackedContext = {
   truncated: boolean;
 };
 
+type StreamedContext = {
+  blocks: Omit<ContextBlock, "char_count" | "token_estimate">[];
+  token_estimate: number;
+  char_count: number;
+  max_chars: number;
+  truncated: boolean;
+};
+
+type StreamDone = {
+  trace_id: string;
+  answer: string;
+  citation_ids: string[];
+  generation_model: string;
+  results: RetrievalResult[];
+};
+
 const backendUrl =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:18000";
 
@@ -112,15 +128,15 @@ function stageDuration(stages: RetrievalStage[], stageName: string) {
   return stages.find((stage) => stage.stage === stageName)?.duration_ms ?? 0;
 }
 
-function latencySummary(response: RetrievalResponse) {
-  const dense = stageDuration(response.stages, "dense retrieval");
-  const sparse = stageDuration(response.stages, "sparse retrieval");
-  const fusion = stageDuration(response.stages, "rank fusion");
-  const expansion = stageDuration(response.stages, "candidate expansion");
-  const rerank = stageDuration(response.stages, "rerank");
-  const context = stageDuration(response.stages, "context packing");
-  const generation = stageDuration(response.stages, "answer generation");
-  const total = response.stages.reduce((sum, stage) => sum + stage.duration_ms, 0);
+function latencySummary(stages: RetrievalStage[]) {
+  const dense = stageDuration(stages, "dense retrieval");
+  const sparse = stageDuration(stages, "sparse retrieval");
+  const fusion = stageDuration(stages, "rank fusion");
+  const expansion = stageDuration(stages, "candidate expansion");
+  const rerank = stageDuration(stages, "rerank");
+  const context = stageDuration(stages, "context packing");
+  const generation = stageDuration(stages, "answer generation");
+  const total = stages.reduce((sum, stage) => sum + stage.duration_ms, 0);
   const retrieval = dense + sparse + fusion + expansion;
   const bottleneck =
     generation >= rerank && generation >= retrieval
@@ -129,18 +145,11 @@ function latencySummary(response: RetrievalResponse) {
         ? "rerank"
         : "retrieval";
 
-  return {
-    total,
-    retrieval,
-    rerank,
-    context,
-    generation,
-    bottleneck,
-  };
+  return { total, retrieval, rerank, context, generation, bottleneck };
 }
 
-function LatencySummaryCard({ response }: { response: RetrievalResponse }) {
-  const summary = latencySummary(response);
+function LatencySummaryCard({ stages, model }: { stages: RetrievalStage[]; model: string }) {
+  const summary = latencySummary(stages);
 
   return (
     <section className="latency-card">
@@ -152,30 +161,12 @@ function LatencySummaryCard({ response }: { response: RetrievalResponse }) {
         <small>bottleneck: {summary.bottleneck}</small>
       </div>
       <div className="latency-grid">
-        <div>
-          <span>Total</span>
-          <strong>{formatDuration(summary.total)}</strong>
-        </div>
-        <div>
-          <span>Retrieval</span>
-          <strong>{formatDuration(summary.retrieval)}</strong>
-        </div>
-        <div>
-          <span>Rerank</span>
-          <strong>{formatDuration(summary.rerank)}</strong>
-        </div>
-        <div>
-          <span>Context</span>
-          <strong>{formatDuration(summary.context)}</strong>
-        </div>
-        <div>
-          <span>Generation</span>
-          <strong>{formatDuration(summary.generation)}</strong>
-        </div>
-        <div>
-          <span>Model</span>
-          <strong>{response.answer.model}</strong>
-        </div>
+        <div><span>Total</span><strong>{formatDuration(summary.total)}</strong></div>
+        <div><span>Retrieval</span><strong>{formatDuration(summary.retrieval)}</strong></div>
+        <div><span>Rerank</span><strong>{formatDuration(summary.rerank)}</strong></div>
+        <div><span>Context</span><strong>{formatDuration(summary.context)}</strong></div>
+        <div><span>Generation</span><strong>{formatDuration(summary.generation)}</strong></div>
+        <div><span>Model</span><strong>{model}</strong></div>
       </div>
     </section>
   );
@@ -186,11 +177,16 @@ export default function ChatPage() {
   const [response, setResponse] = useState<RetrievalResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [generationModel, setGenerationModel] =
-    useState<GenerationModel>("gemma2:2b");
+  const [generationModel, setGenerationModel] = useState<GenerationModel>("gemma2:2b");
   const [feedbackByChunk, setFeedbackByChunk] = useState<Record<string, FeedbackLabel>>({});
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [activeCitation, setActiveCitation] = useState<string | null>(null);
+
+  // Streaming state
+  const [streamText, setStreamText] = useState("");
+  const [liveStages, setLiveStages] = useState<RetrievalStage[]>([]);
+  const [liveContext, setLiveContext] = useState<StreamedContext | null>(null);
+  const [streamDone, setStreamDone] = useState<StreamDone | null>(null);
 
   async function runRetrieval(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -199,23 +195,56 @@ export default function ChatPage() {
 
     setLoading(true);
     setError(null);
+    setResponse(null);
+    setStreamText("");
+    setLiveStages([]);
+    setLiveContext(null);
+    setStreamDone(null);
+    setFeedbackByChunk({});
+    setFeedbackError(null);
+    setActiveCitation(null);
 
     try {
-      const apiResponse = await fetch(`${backendUrl}/api/chat`, {
+      const apiResponse = await fetch(`${backendUrl}/api/chat/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: trimmed, generation_model: generationModel }),
       });
-      const payload = await apiResponse.json();
-      if (!apiResponse.ok) {
+      if (!apiResponse.ok || !apiResponse.body) {
+        const payload = await apiResponse.json() as { detail?: string };
         throw new Error(payload.detail ?? "Retrieval failed.");
       }
-      setResponse(payload);
-      setFeedbackByChunk({});
-      setFeedbackError(null);
-      setActiveCitation(null);
+
+      const reader = apiResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        const parts = buf.split("\n\n");
+        buf = parts.pop() ?? "";
+
+        for (const part of parts) {
+          const lines = part.trim().split("\n");
+          const eventType = lines.find((l) => l.startsWith("event: "))?.slice(7) ?? "";
+          const dataStr = lines.find((l) => l.startsWith("data: "))?.slice(5) ?? "";
+          if (!eventType || !dataStr) continue;
+
+          const data = JSON.parse(dataStr) as Record<string, unknown>;
+          if (eventType === "stage") {
+            setLiveStages((prev) => [...prev, data as unknown as RetrievalStage]);
+          } else if (eventType === "context") {
+            setLiveContext(data as unknown as StreamedContext);
+          } else if (eventType === "token") {
+            setStreamText((prev) => prev + String(data.text ?? ""));
+          } else if (eventType === "done") {
+            setStreamDone(data as unknown as StreamDone);
+          }
+        }
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Retrieval failed.");
     } finally {
@@ -233,9 +262,14 @@ export default function ChatPage() {
   }
 
   async function submitFeedback(result: RetrievalResult, label: FeedbackLabel) {
-    if (!response || !result.document_id || !result.document_version_id) return;
+    if (!result.document_id || !result.document_version_id) return;
+    if (!response && !streamDone) return;
 
     setFeedbackError(null);
+
+    const feedbackQuery = response?.query ?? query;
+    const feedbackMode = response?.mode ?? "hybrid";
+    const feedbackStages = response?.stages ?? liveStages;
 
     try {
       const apiResponse = await fetch(`${backendUrl}/api/retrieval/feedback`, {
@@ -244,8 +278,8 @@ export default function ChatPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          query: response.query,
-          mode: response.mode,
+          query: feedbackQuery,
+          mode: feedbackMode,
           chunk_id: result.chunk_id,
           document_id: result.document_id,
           document_version_id: result.document_version_id,
@@ -258,7 +292,7 @@ export default function ChatPage() {
           sparse_score: result.sparse_score,
           rerank_score: result.rerank_score,
           trace: {
-            stages: response.stages.map((stage) => ({
+            stages: feedbackStages.map((stage) => ({
               sequence: stage.sequence,
               stage: stage.stage,
               status: stage.status,
@@ -332,7 +366,7 @@ export default function ChatPage() {
           {error ? <p className="form-error">{error}</p> : null}
         </section>
 
-        {response ? (
+        {(streamText || streamDone || response) ? (
           <>
             <section className="answer-card">
               <div className="section-heading">
@@ -340,19 +374,24 @@ export default function ChatPage() {
                   <p className="eyebrow">Answer</p>
                   <h2>Generated from packed evidence</h2>
                 </div>
-                <small>{response.answer.model}</small>
+                <small>{streamDone?.generation_model ?? response?.answer.model ?? generationModel}</small>
               </div>
-              <p>{response.answer.text}</p>
+              <p>
+                {streamDone?.answer ?? streamText ?? response?.answer.text ?? ""}
+                {loading && !streamDone ? <span className="stream-cursor" /> : null}
+              </p>
               <div className="score-row">
-                <Link href={`/traces/${response.trace_id}`}>open stored trace</Link>
-                {response.answer.citation_ids.length ? (
+                {streamDone ? (
+                  <Link href={`/traces/${streamDone.trace_id}`}>open stored trace</Link>
+                ) : response ? (
+                  <Link href={`/traces/${response.trace_id}`}>open stored trace</Link>
+                ) : null}
+                {(streamDone?.citation_ids ?? response?.answer.citation_ids ?? []).length ? (
                   <div className="citation-chips" aria-label="Answer citations">
                     <span>citations</span>
-                    {response.answer.citation_ids.map((id) => (
+                    {(streamDone?.citation_ids ?? response?.answer.citation_ids ?? []).map((id) => (
                       <button
-                        className={
-                          activeCitation === id ? "citation-chip active" : "citation-chip"
-                        }
+                        className={activeCitation === id ? "citation-chip active" : "citation-chip"}
                         key={id}
                         type="button"
                         onClick={() => selectCitation(id)}
@@ -364,29 +403,38 @@ export default function ChatPage() {
                 ) : (
                   <span>citations —</span>
                 )}
-                <span>{response.answer.prompt_token_estimate} prompt tokens est.</span>
-                <span>{response.answer.prompt_chars} prompt chars</span>
-              </div>
-              <div className="query-analysis-summary">
-                <span>intent: {response.query_analysis.intent.replaceAll("_", " ")}</span>
-                <span>
-                  topics:{" "}
-                  {response.query_analysis.topics.length
-                    ? response.query_analysis.topics
-                        .map((topic) => topic.replaceAll("_", " "))
-                        .join(", ")
-                    : "none"}
-                </span>
-                {response.query_analysis.expansions.length ? (
-                  <details>
-                    <summary>Expanded retrieval terms</summary>
-                    <p>{response.query_analysis.expansions.join(", ")}</p>
-                  </details>
+                {response ? (
+                  <>
+                    <span>{response.answer.prompt_token_estimate} prompt tokens est.</span>
+                    <span>{response.answer.prompt_chars} prompt chars</span>
+                  </>
                 ) : null}
               </div>
+              {response ? (
+                <div className="query-analysis-summary">
+                  <span>intent: {response.query_analysis.intent.replaceAll("_", " ")}</span>
+                  <span>
+                    topics:{" "}
+                    {response.query_analysis.topics.length
+                      ? response.query_analysis.topics.map((t) => t.replaceAll("_", " ")).join(", ")
+                      : "none"}
+                  </span>
+                  {response.query_analysis.expansions.length ? (
+                    <details>
+                      <summary>Expanded retrieval terms</summary>
+                      <p>{response.query_analysis.expansions.join(", ")}</p>
+                    </details>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
 
-            <LatencySummaryCard response={response} />
+            {(streamDone || (!loading && liveStages.length > 0) || response) ? (
+              <LatencySummaryCard
+                stages={liveStages.length > 0 ? liveStages : (response?.stages ?? [])}
+                model={streamDone?.generation_model ?? response?.answer.model ?? generationModel}
+              />
+            ) : null}
           </>
         ) : null}
 
@@ -400,23 +448,17 @@ export default function ChatPage() {
               {response ? <small>{response.mode.replaceAll("_", " ")}</small> : null}
             </div>
 
-            {response ? (
+            {(liveStages.length > 0 || response) ? (
               <div className="retrieval-stage-list">
-                {response.stages.map((stage) => (
+                {(liveStages.length > 0 ? liveStages : (response?.stages ?? [])).map((stage) => (
                   <article className="retrieval-stage" key={stage.sequence}>
                     <span>{String(stage.sequence).padStart(2, "0")}</span>
                     <div>
                       <h3>{stage.stage}</h3>
                       <p>{stage.message}</p>
                       <dl>
-                        <div>
-                          <dt>Status</dt>
-                          <dd>{stage.status}</dd>
-                        </div>
-                        <div>
-                          <dt>Time</dt>
-                          <dd>{stage.duration_ms} ms</dd>
-                        </div>
+                        <div><dt>Status</dt><dd>{stage.status}</dd></div>
+                        <div><dt>Time</dt><dd>{stage.duration_ms} ms</dd></div>
                         {Object.entries(stage.details).map(([key, value]) => (
                           <div key={key}>
                             <dt>{key.replaceAll("_", " ")}</dt>
@@ -427,6 +469,12 @@ export default function ChatPage() {
                     </div>
                   </article>
                 ))}
+                {loading && !streamDone ? (
+                  <article className="retrieval-stage streaming-stage">
+                    <span className="stream-cursor" />
+                    <div><h3>generating…</h3></div>
+                  </article>
+                ) : null}
               </div>
             ) : (
               <p className="document-empty">
@@ -443,13 +491,15 @@ export default function ChatPage() {
                 <p className="eyebrow">Evidence</p>
                 <h2>Top chunks</h2>
               </div>
-              {response ? <small>{response.results.length} result(s)</small> : null}
+              {(streamDone?.results ?? response?.results) ? (
+                <small>{(streamDone?.results ?? response?.results)!.length} result(s)</small>
+              ) : null}
             </div>
             {feedbackError ? <p className="form-error">{feedbackError}</p> : null}
 
-            {response?.results.length ? (
+            {(streamDone?.results ?? response?.results ?? []).length ? (
               <div className="retrieval-results">
-                {response.results.map((result, index) => (
+                {(streamDone?.results ?? response?.results ?? []).map((result, index) => (
                   <article className="retrieval-result" key={result.chunk_id}>
                     <div className="result-head">
                       <span>#{result.final_rank || index + 1}</span>
@@ -519,7 +569,7 @@ export default function ChatPage() {
                   </article>
                 ))}
               </div>
-            ) : response ? (
+            ) : (streamDone || response) ? (
               <p className="document-empty">
                 No chunks were returned. Confirm at least one document is indexed.
               </p>
@@ -529,49 +579,49 @@ export default function ChatPage() {
               </p>
             )}
 
-            {response ? (
-              <div className="packed-context-card">
-                <div className="section-heading compact">
-                  <div>
-                    <p className="eyebrow">Context</p>
-                    <h2>Prompt evidence pack</h2>
+            {(liveContext ?? response?.packed_context) ? (() => {
+              const ctx = liveContext ?? response?.packed_context;
+              if (!ctx) return null;
+              return (
+                <div className="packed-context-card">
+                  <div className="section-heading compact">
+                    <div>
+                      <p className="eyebrow">Context</p>
+                      <h2>Prompt evidence pack</h2>
+                    </div>
+                    <small>
+                      {ctx.token_estimate} est. tokens ·{" "}
+                      {ctx.char_count}/{ctx.max_chars} chars
+                    </small>
                   </div>
-                  <small>
-                    {response.packed_context.token_estimate} est. tokens ·{" "}
-                    {response.packed_context.char_count}/
-                    {response.packed_context.max_chars} chars
-                  </small>
+                  <div className="context-blocks">
+                    {ctx.blocks.map((block) => (
+                      <article
+                        className={activeCitation === block.citation_id ? "context-block active" : "context-block"}
+                        id={`chat-evidence-${block.citation_id}`}
+                        key={block.citation_id}
+                      >
+                        <h3>[{block.citation_id}] {block.source_filename ?? "Unknown source"}</h3>
+                        <p>
+                          Chunk {block.chunk_index ?? "—"}
+                          {block.section_title ? ` · ${block.section_title}` : ""}
+                          {block.page_number ? ` · page ${block.page_number}` : ""}
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                  {(() => {
+                    const pc = "prompt_context" in ctx ? (ctx as { prompt_context?: string }).prompt_context : undefined;
+                    return pc ? (
+                      <details className="prompt-preview">
+                        <summary>Show packed prompt context</summary>
+                        <pre>{pc}</pre>
+                      </details>
+                    ) : null;
+                  })()}
                 </div>
-
-                <div className="context-blocks">
-                  {response.packed_context.blocks.map((block) => (
-                    <article
-                      className={
-                        activeCitation === block.citation_id
-                          ? "context-block active"
-                          : "context-block"
-                      }
-                      id={`chat-evidence-${block.citation_id}`}
-                      key={block.citation_id}
-                    >
-                      <h3>
-                        [{block.citation_id}] {block.source_filename ?? "Unknown source"}
-                      </h3>
-                      <p>
-                        Chunk {block.chunk_index ?? "—"}
-                        {block.section_title ? ` · ${block.section_title}` : ""}
-                        {block.page_number ? ` · page ${block.page_number}` : ""}
-                      </p>
-                    </article>
-                  ))}
-                </div>
-
-                <details className="prompt-preview">
-                  <summary>Show packed prompt context</summary>
-                  <pre>{response.packed_context.prompt_context}</pre>
-                </details>
-              </div>
-            ) : null}
+              );
+            })() : null}
           </div>
         </section>
       </div>

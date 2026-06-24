@@ -1,4 +1,6 @@
+import json
 import re
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import httpx
@@ -124,3 +126,52 @@ async def generate_answer(
         prompt_chars=len(prompt),
         prompt_token_estimate=max(1, len(prompt) // 4),
     )
+
+
+async def stream_answer_tokens(
+    query: str,
+    context: PackedContext,
+    settings: Settings,
+    generation_model: str | None = None,
+) -> AsyncIterator[str]:
+    """Yield raw token strings from Ollama one at a time."""
+    selected_model = generation_model or settings.generation_model
+    if not context.prompt_context.strip():
+        yield "Not enough evidence."
+        return
+
+    prompt = build_answer_prompt(query, context)
+    payload = {
+        "model": selected_model,
+        "messages": [
+            {"role": "system", "content": build_system_prompt()},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": True,
+        "think": False,
+        "options": {
+            "temperature": 0,
+            "top_p": 0.2,
+            "num_ctx": 4096,
+            "num_predict": settings.generation_num_predict,
+        },
+    }
+    async with httpx.AsyncClient(timeout=settings.generation_timeout_seconds) as client:
+        async with client.stream(
+            "POST",
+            f"{settings.ollama_base_url}/api/chat",
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                token = chunk.get("message", {}).get("content", "")
+                if token:
+                    yield token
+                if chunk.get("done"):
+                    break
