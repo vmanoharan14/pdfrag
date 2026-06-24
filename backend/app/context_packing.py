@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,8 +30,23 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_ATTR_FRAGMENT_RE = re.compile(r'\b[\w-]+=(?:"[^"]*"|\'[^\']*\')[^<\n]*>', re.IGNORECASE)
+_MARKDOWN_BOLD_ITALIC_RE = re.compile(r"\*{1,3}([^*\n]+)\*{1,3}")
+_MULTI_BLANK_RE = re.compile(r"\n{3,}")
+
+
 def clean_context_text(text: str) -> str:
+    text = _HTML_TAG_RE.sub("", text)
+    text = _HTML_ATTR_FRAGMENT_RE.sub("", text)
+    text = _MULTI_BLANK_RE.sub("\n\n", text)
     return "\n".join(line.rstrip() for line in text.strip().splitlines()).strip()
+
+
+def clean_section_title(title: str | None) -> str | None:
+    if not title:
+        return title
+    return _MARKDOWN_BOLD_ITALIC_RE.sub(r"\1", title).strip()
 
 
 def source_label(payload: dict[str, Any]) -> str:
@@ -97,7 +113,7 @@ def pack_context(
                 chunk_id=chunk_id,
                 source_filename=payload.get("source_filename"),
                 chunk_index=payload.get("chunk_index"),
-                section_title=payload.get("section_title"),
+                section_title=clean_section_title(payload.get("section_title")),
                 page_number=payload.get("page_number"),
                 text=text,
                 char_count=len(text),

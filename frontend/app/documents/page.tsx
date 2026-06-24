@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 type DocumentItem = {
   document_id: string;
@@ -142,11 +142,14 @@ export default function DocumentsPage() {
     Record<string, DocumentChunk[]>
   >({});
   const [expandedVersionId, setExpandedVersionId] = useState<string | null>(null);
-  const [selected, setSelected] = useState<File | null>(null);
+  const [queue, setQueue] = useState<File[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocuments = useCallback(async () => {
     try {
@@ -194,41 +197,71 @@ export default function DocumentsPage() {
     };
   }, []);
 
-  function chooseFile(event: ChangeEvent<HTMLInputElement>) {
-    setSelected(event.target.files?.[0] ?? null);
+  function addFiles(files: FileList | File[]) {
+    setQueue((prev) => [...prev, ...Array.from(files)]);
     setError(null);
     setMessage(null);
   }
 
+  function chooseFile(event: ChangeEvent<HTMLInputElement>) {
+    if (event.target.files) addFiles(event.target.files);
+  }
+
+  function onDragOver(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDragOver(true);
+  }
+
+  function onDragLeave() {
+    setDragOver(false);
+  }
+
+  function onDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDragOver(false);
+    if (event.dataTransfer.files) addFiles(event.dataTransfer.files);
+  }
+
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (queue.length === 0) return;
 
     setUploading(true);
     setError(null);
     setMessage(null);
-    const body = new FormData();
-    body.append("file", selected);
+    setUploadProgress({ done: 0, total: queue.length });
 
-    try {
-      const response = await fetch(`${backendUrl}/api/documents`, {
-        method: "POST",
-        body,
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail ?? "Upload failed.");
+    const failed: string[] = [];
+    for (let i = 0; i < queue.length; i++) {
+      const file = queue[i];
+      const body = new FormData();
+      body.append("file", file);
+      try {
+        const response = await fetch(`${backendUrl}/api/documents`, {
+          method: "POST",
+          body,
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          failed.push(`${file.name}: ${String(payload.detail ?? "Upload failed.")}`);
+        }
+      } catch {
+        failed.push(`${file.name}: network error`);
       }
-      setMessage(`Queued ${payload.filename} as job ${payload.job_id}.`);
-      setSelected(null);
-      const input = document.getElementById("document-file") as HTMLInputElement;
-      input.value = "";
-      await loadDocuments();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Upload failed.");
-    } finally {
-      setUploading(false);
+      setUploadProgress({ done: i + 1, total: queue.length });
     }
+
+    setQueue([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setUploadProgress(null);
+    setUploading(false);
+
+    if (failed.length > 0) {
+      setError(`${String(failed.length)} file(s) failed:\n${failed.slice(0, 5).join("\n")}${failed.length > 5 ? "\n…" : ""}`);
+    } else {
+      setMessage(`Queued ${String(queue.length)} file(s) for ingestion.`);
+    }
+    await loadDocuments();
   }
 
   async function retryJob(jobId: string) {
@@ -323,22 +356,45 @@ export default function DocumentsPage() {
           </div>
 
           <form onSubmit={upload}>
-            <label className="file-picker" htmlFor="document-file">
+            <label
+              className={`file-picker${dragOver ? " drag-over" : ""}`}
+              htmlFor="document-file"
+              onDragLeave={onDragLeave}
+              onDragOver={onDragOver}
+              onDrop={onDrop}
+            >
               <span>
-                {selected
-                  ? selected.name
-                  : "Choose digital PDF, Markdown, or text"}
+                {queue.length > 0
+                  ? `${String(queue.length)} file${queue.length > 1 ? "s" : ""} selected`
+                  : "Drop files here or click to choose"}
               </span>
-              <small>{selected ? formatBytes(selected.size) : "Maximum 50 MB"}</small>
+              <small>
+                {queue.length > 0
+                  ? `${queue.map((f) => f.name).slice(0, 3).join(", ")}${queue.length > 3 ? ` +${String(queue.length - 3)} more` : ""}`
+                  : "PDF, Markdown, or text · 50 MB max per file"}
+              </small>
               <input
                 accept=".pdf,.md,.markdown,.txt,application/pdf,text/plain,text/markdown"
                 id="document-file"
+                multiple
                 onChange={chooseFile}
+                ref={fileInputRef}
                 type="file"
               />
             </label>
-            <button className="upload-button" disabled={!selected || uploading}>
-              {uploading ? "Uploading…" : "Upload and queue"}
+            {queue.length > 0 && !uploading && (
+              <button
+                className="clear-queue-button"
+                onClick={() => { setQueue([]); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                type="button"
+              >
+                Clear ({String(queue.length)})
+              </button>
+            )}
+            <button className="upload-button" disabled={queue.length === 0 || uploading}>
+              {uploading && uploadProgress
+                ? `Uploading ${String(uploadProgress.done)} of ${String(uploadProgress.total)}…`
+                : `Upload${queue.length > 1 ? ` ${String(queue.length)} files` : " and queue"}`}
             </button>
           </form>
 

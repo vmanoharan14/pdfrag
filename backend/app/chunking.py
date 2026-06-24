@@ -24,7 +24,9 @@ def is_heading(line: str) -> bool:
 
 
 def heading_text(line: str) -> str:
-    return re.sub(r"^#{1,6}\s+", "", line.strip()).strip()
+    text = re.sub(r"^#{1,6}\s+", "", line.strip()).strip()
+    text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
+    return text.strip()
 
 
 def is_table_block(block: str) -> bool:

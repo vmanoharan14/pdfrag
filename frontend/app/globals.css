@@ -1180,6 +1180,12 @@ textarea {
   border-color: var(--brand);
 }
 
+.file-picker.drag-over {
+  background: var(--brand-pale);
+  border-color: var(--brand);
+  border-style: solid;
+}
+
 .file-picker span {
   font-size: 13px;
   font-weight: 700;
@@ -1192,6 +1198,23 @@ textarea {
 
 .file-picker input {
   display: none;
+}
+
+.clear-queue-button {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 36px;
+  padding: 0 14px;
+}
+
+.clear-queue-button:hover {
+  border-color: var(--muted);
+  color: var(--ink);
 }
 
 .upload-button {
