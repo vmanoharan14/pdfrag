@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -752,7 +753,7 @@ async def persist_stream_trace(
         user_id="local-user",
         original_question=pipeline.query,
         normalized_query=pipeline.analysis.retrieval_query,
-        mode="generated_answer",
+        mode=pipeline.retrieval_mode,
         evidence_status=evidence_status,
         answer=answer,
         citations=citation_ids,
@@ -834,6 +835,7 @@ class PipelineContext:
     query: str
     analysis: QueryAnalysis
     generation_model: str
+    retrieval_mode: str
     stages: list[RetrievalStage]
     ranked: list[FusedCandidate]
     packed_context: PackedContext
@@ -842,80 +844,85 @@ class PipelineContext:
 async def run_pipeline_to_context(
     request: RetrievalRequest,
     session: AsyncSession,
+    on_stage: Callable[[RetrievalStage], Awaitable[None]] | None = None,
 ) -> PipelineContext:
-    """Run stages 1–10 (query analysis through context packing) and return intermediate state."""
+    """Run stages 1–10 (query analysis through context packing) and return intermediate state.
+
+    If on_stage is provided it is awaited immediately after each stage completes,
+    enabling real-time SSE emission without buffering.
+    """
+    async def emit(stage: RetrievalStage) -> RetrievalStage:
+        stages.append(stage)
+        if on_stage:
+            await on_stage(stage)
+        return stage
+
     query = request.query.strip()
     if not query:
         raise HTTPException(status_code=422, detail="Query cannot be blank.")
 
     settings = get_settings()
     generation_model = selected_generation_model(request, settings)
+    stages: list[RetrievalStage] = []
+
     started_at = time.perf_counter()
     analysis = analyze_query(query)
-    stages: list[RetrievalStage] = [
-        RetrievalStage(
-            sequence=1,
-            stage="query analysis",
-            status="completed",
-            message="Analyzed the question and expanded retrieval terms.",
-            duration_ms=elapsed_ms(started_at),
-            details={
-                "intent": analysis.intent,
-                "topics": analysis.topics,
-                "expansions": analysis.expansions,
-                "original_query_length": len(query),
-                "retrieval_query_length": len(analysis.retrieval_query),
-            },
-        )
-    ]
+    await emit(RetrievalStage(
+        sequence=1,
+        stage="query analysis",
+        status="completed",
+        message="Analyzed the question and expanded retrieval terms.",
+        duration_ms=elapsed_ms(started_at),
+        details={
+            "intent": analysis.intent,
+            "topics": analysis.topics,
+            "expansions": analysis.expansions,
+            "original_query_length": len(query),
+            "retrieval_query_length": len(analysis.retrieval_query),
+        },
+    ))
 
     started_at = time.perf_counter()
-    stages.append(local_security_context_stage(sequence=2, duration_ms=elapsed_ms(started_at)))
+    await emit(local_security_context_stage(sequence=2, duration_ms=elapsed_ms(started_at)))
 
     started_at = time.perf_counter()
-    stages.append(
-        response_cache_stage(
-            sequence=3,
-            query=query,
-            settings=settings,
-            generation_model=generation_model,
-            duration_ms=elapsed_ms(started_at),
-        )
-    )
+    await emit(response_cache_stage(
+        sequence=3,
+        query=query,
+        settings=settings,
+        generation_model=generation_model,
+        duration_ms=elapsed_ms(started_at),
+    ))
 
     started_at = time.perf_counter()
     router_decision = await route_query(query, analysis, settings)
-    stages.append(
-        RetrievalStage(
-            sequence=4,
-            stage="intent routing",
-            status=(
-                "completed"
-                if router_decision.source == "gemma"
-                else "skipped"
-                if router_decision.source == "deterministic"
-                else "fallback"
-            ),
-            message=(
-                "Selected retrieval path with the local router model."
-                if router_decision.source == "gemma"
-                else "LLM router disabled locally; used deterministic hybrid routing."
-                if router_decision.source == "deterministic"
-                else "Router unavailable or invalid; used deterministic hybrid fallback."
-            ),
-            duration_ms=elapsed_ms(started_at),
-            details={
-                "source": router_decision.source,
-                "model": router_decision.model,
-                "intent": router_decision.intent,
-                "requested_retrieval_path": router_decision.requested_retrieval_path,
-                "selected_retrieval_path": router_decision.selected_retrieval_path,
-                "needs_rewrite": router_decision.needs_rewrite,
-                "rewrite_query_length": len(router_decision.rewrite_query),
-                "fallback_reason": router_decision.fallback_reason,
-            },
-        )
-    )
+    await emit(RetrievalStage(
+        sequence=4,
+        stage="intent routing",
+        status=(
+            "completed" if router_decision.source == "gemma"
+            else "skipped" if router_decision.source == "deterministic"
+            else "fallback"
+        ),
+        message=(
+            "Selected retrieval path with the local router model."
+            if router_decision.source == "gemma"
+            else "LLM router disabled locally; used deterministic hybrid routing."
+            if router_decision.source == "deterministic"
+            else "Router unavailable or invalid; used deterministic hybrid fallback."
+        ),
+        duration_ms=elapsed_ms(started_at),
+        details={
+            "source": router_decision.source,
+            "model": router_decision.model,
+            "intent": router_decision.intent,
+            "requested_retrieval_path": router_decision.requested_retrieval_path,
+            "selected_retrieval_path": router_decision.selected_retrieval_path,
+            "needs_rewrite": router_decision.needs_rewrite,
+            "rewrite_query_length": len(router_decision.rewrite_query),
+            "fallback_reason": router_decision.fallback_reason,
+        },
+    ))
 
     try:
         started_at = time.perf_counter()
@@ -924,16 +931,14 @@ async def run_pipeline_to_context(
         dense_points = await keep_active_points(session, dense_points)
         dense_details["returned_after_active_filter"] = len(dense_points)
         dense_details["stale_discarded"] = raw_dense_count - len(dense_points)
-        stages.append(
-            RetrievalStage(
-                sequence=5,
-                stage="dense retrieval",
-                status="completed",
-                message="Retrieved semantic candidates and kept active DB chunks.",
-                duration_ms=elapsed_ms(started_at),
-                details=dense_details,
-            )
-        )
+        await emit(RetrievalStage(
+            sequence=5,
+            stage="dense retrieval",
+            status="completed",
+            message="Retrieved semantic candidates and kept active DB chunks.",
+            duration_ms=elapsed_ms(started_at),
+            details=dense_details,
+        ))
 
         started_at = time.perf_counter()
         sparse_points, sparse_details = await query_sparse(analysis.retrieval_query, settings)
@@ -941,49 +946,43 @@ async def run_pipeline_to_context(
         sparse_points = await keep_active_points(session, sparse_points)
         sparse_details["returned_after_active_filter"] = len(sparse_points)
         sparse_details["stale_discarded"] = raw_sparse_count - len(sparse_points)
-        stages.append(
-            RetrievalStage(
-                sequence=6,
-                stage="sparse retrieval",
-                status="completed",
-                message="Retrieved lexical candidates and kept active DB chunks.",
-                duration_ms=elapsed_ms(started_at),
-                details=sparse_details,
-            )
-        )
+        await emit(RetrievalStage(
+            sequence=6,
+            stage="sparse retrieval",
+            status="completed",
+            message="Retrieved lexical candidates and kept active DB chunks.",
+            duration_ms=elapsed_ms(started_at),
+            details=sparse_details,
+        ))
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     started_at = time.perf_counter()
     fused = reciprocal_rank_fuse(dense_points, sparse_points)
-    stages.append(
-        RetrievalStage(
-            sequence=7,
-            stage="rank fusion",
-            status="completed",
-            message="Fused dense and sparse rankings using reciprocal rank fusion.",
-            duration_ms=elapsed_ms(started_at),
-            details={
-                "dense_candidates": len(dense_points),
-                "sparse_candidates": len(sparse_points),
-                "fused_candidates": len(fused),
-                "algorithm": f"RRF k={RRF_K}",
-            },
-        )
-    )
+    await emit(RetrievalStage(
+        sequence=7,
+        stage="rank fusion",
+        status="completed",
+        message="Fused dense and sparse rankings using reciprocal rank fusion.",
+        duration_ms=elapsed_ms(started_at),
+        details={
+            "dense_candidates": len(dense_points),
+            "sparse_candidates": len(sparse_points),
+            "fused_candidates": len(fused),
+            "algorithm": f"RRF k={RRF_K}",
+        },
+    ))
 
     started_at = time.perf_counter()
     ranked, expansion_details = await expand_candidates_with_neighbors(session, fused)
-    stages.append(
-        RetrievalStage(
-            sequence=8,
-            stage="candidate expansion",
-            status="completed",
-            message="Added neighboring chunks around fused candidates before reranking.",
-            duration_ms=elapsed_ms(started_at),
-            details=expansion_details,
-        )
-    )
+    await emit(RetrievalStage(
+        sequence=8,
+        stage="candidate expansion",
+        status="completed",
+        message="Added neighboring chunks around fused candidates before reranking.",
+        duration_ms=elapsed_ms(started_at),
+        details=expansion_details,
+    ))
 
     started_at = time.perf_counter()
     reranker_status = "completed"
@@ -1015,27 +1014,14 @@ async def run_pipeline_to_context(
             "candidate_count": len(fused),
             "error": str(exc),
         }
-    stages.append(
-        RetrievalStage(
-            sequence=9,
-            stage="rerank",
-            status=reranker_status,
-            message=reranker_message,
-            duration_ms=elapsed_ms(started_at),
-            details=reranker_details,
-        )
-    )
-
-    stages.append(
-        RetrievalStage(
-            sequence=10,
-            stage="context packing",
-            status="completed",
-            message="Packed selected evidence into the context for the answer model.",
-            duration_ms=0,
-            details={},
-        )
-    )
+    await emit(RetrievalStage(
+        sequence=9,
+        stage="rerank",
+        status=reranker_status,
+        message=reranker_message,
+        duration_ms=elapsed_ms(started_at),
+        details=reranker_details,
+    ))
 
     started_at = time.perf_counter()
     packed_context = pack_context(
@@ -1043,20 +1029,27 @@ async def run_pipeline_to_context(
         max_chars=settings.context_max_chars,
         max_chunks=settings.context_max_chunks,
     )
-    stages[-1].duration_ms = elapsed_ms(started_at)
-    stages[-1].details = {
-        "selected_chunks": len(packed_context.blocks),
-        "char_count": packed_context.char_count,
-        "token_estimate": packed_context.token_estimate,
-        "max_chars": packed_context.max_chars,
-        "truncated": packed_context.truncated,
-    }
+    await emit(RetrievalStage(
+        sequence=10,
+        stage="context packing",
+        status="completed",
+        message="Packed selected evidence into the context for the answer model.",
+        duration_ms=elapsed_ms(started_at),
+        details={
+            "selected_chunks": len(packed_context.blocks),
+            "char_count": packed_context.char_count,
+            "token_estimate": packed_context.token_estimate,
+            "max_chars": packed_context.max_chars,
+            "truncated": packed_context.truncated,
+        },
+    ))
 
     return PipelineContext(
         trace_id=uuid.uuid4(),
         query=query,
         analysis=analysis,
         generation_model=generation_model,
+        retrieval_mode=router_decision.selected_retrieval_path,
         stages=stages,
         ranked=ranked,
         packed_context=packed_context,

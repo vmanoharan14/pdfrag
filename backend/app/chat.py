@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from collections.abc import AsyncIterator
@@ -10,17 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.database import get_session
 from app.generation import extract_citation_ids, stream_answer_tokens
-from app.retrieval import PipelineContext, RetrievalRequest, RetrievalResponse, persist_stream_trace, result_from_candidate, run_pipeline_to_context, search_documents
+from app.retrieval import PipelineContext, RetrievalRequest, RetrievalStage, persist_stream_trace, result_from_candidate, run_pipeline_to_context
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
-
-@router.post("/chat", response_model=RetrievalResponse)
-async def chat(
-    request: RetrievalRequest,
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> RetrievalResponse:
-    return await search_documents(request, session)
 
 
 def _sse(event: str, data: object) -> str:
@@ -32,10 +26,26 @@ async def _stream_chat(
     session: AsyncSession,
     settings: Settings,
 ) -> AsyncIterator[str]:
-    # Run all pipeline stages up to context packing, emitting stage events.
-    pipeline_result = await run_pipeline_to_context(request, session)
-    for stage in pipeline_result.stages:
-        yield _sse("stage", stage.model_dump())
+    # Stream each pipeline stage as it completes via a queue + background task.
+    stage_queue: asyncio.Queue[RetrievalStage | None] = asyncio.Queue()
+
+    async def on_stage(stage: RetrievalStage) -> None:
+        await stage_queue.put(stage)
+
+    async def run_and_signal() -> PipelineContext:
+        result = await run_pipeline_to_context(request, session, on_stage=on_stage)
+        await stage_queue.put(None)  # sentinel — pipeline finished
+        return result
+
+    pipeline_task: asyncio.Task[PipelineContext] = asyncio.create_task(run_and_signal())
+
+    while True:
+        item = await stage_queue.get()
+        if item is None:
+            break
+        yield _sse("stage", item.model_dump())
+
+    pipeline_result = await pipeline_task
 
     yield _sse("context", {
         "blocks": [
@@ -86,6 +96,7 @@ async def _stream_chat(
         "answer": accumulated,
         "citation_ids": citation_ids,
         "generation_model": request.generation_model or settings.generation_model,
+        "retrieval_mode": pipeline_result.retrieval_mode,
         "results": results_dicts,
     })
 

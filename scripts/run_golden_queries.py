@@ -243,7 +243,7 @@ def run_case(
 ) -> GoldenResult:
     started_at = time.perf_counter()
     response = post_json(
-        f"{backend_url.rstrip('/')}/api/chat",
+        f"{backend_url.rstrip('/')}/api/retrieval/search",
         {"query": case.query, "generation_model": generation_model},
         timeout_seconds,
     )

@@ -95,6 +95,7 @@ type StreamDone = {
   answer: string;
   citation_ids: string[];
   generation_model: string;
+  retrieval_mode: string;
   results: RetrievalResult[];
 };
 
@@ -268,7 +269,7 @@ export default function ChatPage() {
     setFeedbackError(null);
 
     const feedbackQuery = response?.query ?? query;
-    const feedbackMode = response?.mode ?? "hybrid";
+    const feedbackMode = response?.mode ?? streamDone?.retrieval_mode ?? "hybrid";
     const feedbackStages = response?.stages ?? liveStages;
 
     try {
