@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 
 type TraceStep = {
   sequence: number;
@@ -89,6 +90,16 @@ function toneForStage(stage: string) {
   return "slate";
 }
 
+type EvalResponse = {
+  trace_id: string;
+  evaluator_model: string;
+  ragas_version: string;
+  faithfulness: number | null;
+  answer_relevancy: number | null;
+  context_precision: number | null;
+  evaluated_at: string;
+};
+
 async function getTrace(traceId: string): Promise<TraceResponse> {
   const response = await fetch(`${backendUrl}/api/traces/${traceId}`, {
     cache: "no-store",
@@ -100,13 +111,38 @@ async function getTrace(traceId: string): Promise<TraceResponse> {
   return response.json();
 }
 
+async function getEval(traceId: string): Promise<EvalResponse | null> {
+  try {
+    const response = await fetch(`${backendUrl}/api/traces/${traceId}/eval`, {
+      cache: "no-store",
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
+function scoreBar(value: number | null) {
+  if (value === null) return <span className="eval-score-na">—</span>;
+  const pct = Math.round(value * 100);
+  const tone = pct >= 70 ? "good" : pct >= 40 ? "mid" : "low";
+  return (
+    <div className="eval-score-bar-wrap">
+      <div className={`eval-score-bar ${tone}`} style={{ width: `${pct}%` }} />
+      <span className="eval-score-value">{pct}%</span>
+    </div>
+  );
+}
+
 export default async function TracePage({
   params,
 }: {
   params: Promise<{ traceId: string }>;
 }) {
   const { traceId } = await params;
-  const trace = await getTrace(traceId);
+  const [trace, evalData] = await Promise.all([getTrace(traceId), getEval(traceId)]);
   const totalLatency = Object.values(trace.timings_ms).reduce(
     (total, value) => total + value,
     0,
@@ -166,6 +202,51 @@ export default async function TracePage({
               <dd>{packedBlocks.length}</dd>
             </div>
           </dl>
+        </section>
+
+        <section className="eval-section">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Quality</p>
+              <h2>RAGAS evaluation</h2>
+            </div>
+            {evalData ? (
+              <small>{evalData.evaluator_model} · ragas {evalData.ragas_version}</small>
+            ) : (
+              <small className="eval-hint">
+                Run{" "}
+                <code>.runtime/venv/bin/python scripts/run_ragas_eval.py --trace-id {traceId}</code>
+              </small>
+            )}
+          </div>
+
+          {evalData ? (
+            <div className="eval-scores">
+              <div className="eval-metric">
+                <div className="eval-metric-label">
+                  <span>Faithfulness</span>
+                  <small>Answer claims supported by context</small>
+                </div>
+                {scoreBar(evalData.faithfulness)}
+              </div>
+              <div className="eval-metric">
+                <div className="eval-metric-label">
+                  <span>Answer relevancy</span>
+                  <small>Answer addresses the question</small>
+                </div>
+                {scoreBar(evalData.answer_relevancy)}
+              </div>
+              <div className="eval-metric">
+                <div className="eval-metric-label">
+                  <span>Context precision</span>
+                  <small>Retrieved chunks relevant to query</small>
+                </div>
+                {scoreBar(evalData.context_precision)}
+              </div>
+            </div>
+          ) : (
+            <p className="document-empty">No RAGAS scores yet for this trace.</p>
+          )}
         </section>
 
         <section className="pipeline-section">

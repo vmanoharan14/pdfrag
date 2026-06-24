@@ -44,7 +44,7 @@ type RetrievalResponse = {
 };
 
 type FeedbackLabel = "correct" | "incomplete" | "wrong";
-type GenerationModel = "qwen3.5:9b" | "gemma2:2b";
+type GenerationModel = "gemma2:2b" | "gemma4:e4b";
 
 type QueryAnalysis = {
   original_query: string;
@@ -387,8 +387,8 @@ export default function ChatPage() {
                     setGenerationModel(event.target.value as GenerationModel)
                   }
                 >
-                  <option value="gemma2:2b">gemma2:2b · default fast local</option>
-                  <option value="qwen3.5:9b">qwen3.5:9b · quality check</option>
+                  <option value="gemma2:2b">gemma2:2b · default fast (~2.1s)</option>
+                  <option value="gemma4:e4b">gemma4:e4b · quality (~7s)</option>
                 </select>
               </label>
               <button

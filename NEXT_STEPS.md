@@ -1,6 +1,6 @@
 # PDFRAG Restart Plan
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
 
 Use this file to resume work after a break without relying on chat memory.
 
@@ -16,16 +16,15 @@ Use this file to resume work after a break without relying on chat memory.
 
 Branch: `main`
 
-Latest commits:
+Latest commits (pending commit for this session's work):
 
 ```text
+cb35b50 docs: update NEXT_STEPS and PROJECT_DECISIONS with all session changes
 604ec78 fix: exclude feedback-capped chunks from context and invalidate cache on wrong vote
 b3f0d7d feat: table-aware chunking with streaming render batching
-2b4ed1e feat: feedback-driven reranking and user portal polish
-5603ff3 feat: add user-facing benefits search page at /search
 ```
 
-Golden suite: **7/7 passing** on `gemma2:2b` (including `no_evidence`).
+Golden suite: **7/7 passing** on `gemma4:e4b` and all tested models.
 
 ## Current Capabilities
 
@@ -36,6 +35,9 @@ Golden suite: **7/7 passing** on `gemma2:2b` (including `no_evidence`).
 - `/api/cache` (GET / DELETE) — two-tier response cache management.
 - `/api/retrieval/feedback` (POST) — record admin evidence feedback; automatically
   evicts cache entries that cited the chunk when label is "wrong".
+- `GET /api/traces` — paginated trace list with `?q=`, `?evidence_status=`, `?cache_event=` filters.
+- `GET /api/traces/{trace_id}` — full trace detail with steps, context, timings.
+- `GET /api/traces/{trace_id}/eval` — RAGAS evaluation scores for a trace.
 - Query analysis expands known topics: enrollment, mental health, emergency care.
 - LLM router stage exists but disabled by default locally.
 - Hybrid retrieval: dense `nomic-embed-text` + sparse BM25, reciprocal rank fusion.
@@ -47,11 +49,10 @@ Golden suite: **7/7 passing** on `gemma2:2b` (including `no_evidence`).
   from context packing — ranking penalty alone is not enough when no better results exist.
 - **Cache invalidation on wrong vote**: when a chunk receives a "wrong" vote, all cache
   entries that included that chunk are immediately evicted.
-- Answer generation: `gemma2:2b` default, `qwen3.5:9b` selectable.
+- Answer generation: `gemma2:2b` default (~2.1s), `gemma4:e4b` quality option (~7.8s).
 - Tokens stream via Ollama streaming API; stages stream in real-time via asyncio.Queue.
 - Two-tier response cache: exact hash (PostgreSQL) + semantic similarity (Qdrant 0.93).
 - Full RAG trace persisted via `persist_stream_trace` after SSE generation.
-- `GET /api/traces/{trace_id}` returns stored trace JSON.
 
 ### Chunking (table/form-aware)
 
@@ -74,6 +75,11 @@ Golden suite: **7/7 passing** on `gemma2:2b` (including `no_evidence`).
   suggested questions, SSE streaming answer, source list.
 - `/chat` — admin console with full pipeline trace, feedback buttons, score badges
   (`feedback-boost` / `feedback-penalty`), feedback_adjustment shown per chunk.
+  Model selector: `gemma2:2b` (default fast) or `gemma4:e4b` (quality).
+- `/traces` — admin trace list with search input, evidence status and cache filter chips,
+  click-through to trace detail. Replaces old `/traces/demo` sidebar link.
+- `/traces/{trace_id}` — full trace detail including RAGAS eval panel (faithfulness,
+  answer relevancy, context precision score bars). Shows run command if no scores yet.
 - **Streaming render batching**: token updates batched via `requestAnimationFrame`
   in both `/search` and `/chat` — re-renders capped at ~60fps instead of per token.
 - Admin feedback buttons only in `/chat`; `/search` has no feedback mechanism.
@@ -81,7 +87,6 @@ Golden suite: **7/7 passing** on `gemma2:2b` (including `no_evidence`).
 - "Clear cache" button in admin `/chat`.
 - Citation click highlights matching evidence blocks.
 - Latency summary card below answers.
-- `/traces/{trace_id}` renders persisted traces.
 
 ### Ingestion / Documents
 
@@ -98,10 +103,11 @@ Scripts:
 
 ```text
 scripts/run_golden_queries.py
+scripts/run_ragas_eval.py
 scripts/compare_generation_models.py
 ```
 
-Current golden cases (7/7 passing):
+Current golden cases (7/7 passing on all tested models):
 
 - `enrollment`
 - `mental_health_panic`
@@ -109,16 +115,26 @@ Current golden cases (7/7 passing):
 - `specialist_visit_copay`
 - `prescription_drugs`
 - `preventive_care`
-- `no_evidence` — now correctly returns "Not enough evidence." after feedback exclusion fix
+- `no_evidence` — correctly returns "Not enough evidence." after feedback exclusion fix
 
 Run commands:
 
 ```bash
-.runtime/venv/bin/python scripts/run_golden_queries.py --generation-model gemma2:2b
-.runtime/venv/bin/python scripts/run_golden_queries.py --generation-model gemma2:2b --case no_evidence
-.runtime/venv/bin/python scripts/run_golden_queries.py --generation-model gemma2:2b --json-output .runtime/evals/golden-gemma.json
-.runtime/venv/bin/python scripts/compare_generation_models.py --models qwen3.5:9b,gemma2:2b --json-output .runtime/evals/model-comparison.json
+# Golden suite
+.venv/bin/python scripts/run_golden_queries.py --generation-model gemma4:e4b
+.venv/bin/python scripts/run_golden_queries.py --generation-model gemma4:e4b --timeout-seconds 300
+.venv/bin/python scripts/run_golden_queries.py --generation-model gemma2:2b
+
+# RAGAS offline evaluation (pull gemma3:4b first if not present)
+.venv/bin/python scripts/run_ragas_eval.py                          # last 20 unevaluated traces
+.venv/bin/python scripts/run_ragas_eval.py --trace-id <uuid>        # single trace
+.venv/bin/python scripts/run_ragas_eval.py --model gemma3:4b --rerun  # re-score all
 ```
+
+RAGAS findings summary:
+- Context precision 0.000 on mental_health and emergency cases = cross-plan bleed from TX-NEXUS chunks
+- Specialist copay faithfulness consistently lowest = same cross-plan root cause
+- Both fixed by pending slice #1: document routing / plan filtering
 
 ## Completed Slices (full history)
 
@@ -127,7 +143,7 @@ Run commands:
 3. Full RAG trace persistence and visual trace page.
 4. Deterministic golden evaluation suite (7 cases).
 5. Warmup-aware model latency comparison script.
-6. `gemma2:2b` as default generation model.
+6. `gemma2:2b` as initial default generation model.
 7. Ingestion quality observability, document delete, re-chunk UI.
 8. SSE streaming endpoint (`/api/chat/stream`) with real-time stages and token streaming.
 9. Two-tier response cache: exact hash (PostgreSQL) + semantic (Qdrant 0.93 threshold).
@@ -146,28 +162,39 @@ Run commands:
 18. **Table/form-aware chunking** — `normalize_table_markdown`, `is_form_block`,
     `split_large_table`, section context prefix, 12 unit tests.
 19. **Streaming render batching** — RAF batching in `/search` and `/chat` token handlers.
+20. **Admin trace list page** (`/traces`) — `GET /api/traces` endpoint with search/filter;
+    frontend list with evidence status chips, cache chips, click-through to detail.
+21. **RAGAS offline evaluation** — `rag_evaluations` table (migration 0009), `run_ragas_eval.py`
+    script, `GET /api/traces/{id}/eval` endpoint, RAGAS score panel in trace detail UI.
+22. **Multi-model benchmark and model consolidation** — tested 5 models (gemma2:2b,
+    gemma3:4b, gemma4:e2b, gemma4:e4b, qwen2.5:1.5b-instruct) against golden suite and RAGAS;
+    `gemma2:2b` kept as default (fast, ~2.1s); `gemma4:e4b` as quality option (faithfulness 0.90, context precision 0.90);
+    all other models removed from Ollama and codebase.
 
 ## Pending Slices (priority order)
 
-### 1. Conversation support
+### 1. Document routing / plan filtering
+
+**Confirmed root cause by RAGAS**: context precision 0.000 on mental_health and emergency
+cases is caused by TX-NEXUS chunks being retrieved for NJ Transit queries. Multiple plan
+documents bleed into each other's answers.
+
+Fix: tag documents at upload with a plan/group identifier; query-time Qdrant filter
+scopes retrieval to the correct plan.
+
+### 2. Conversation support
 
 Rules:
 - Each turn re-retrieves independently — summaries must not replace source evidence.
 - Store conversation ID; summaries reference only cited chunks.
 - Answer generation still needs retrieved evidence, not only summary.
 
-### 2. Document routing / plan filtering
+### 3. Admin trace list enhancements
 
-Problem: multiple plan documents indexed (e.g., UHC vs NJ Transit) cause answer bleed.
-Fix: tag documents at upload with a plan/group identifier; query-time Qdrant filter
-scopes retrieval to the correct plan.
-
-### 3. Admin trace list/search page
-
-Add to `/traces`:
-- Recent trace list with query, model, latency, evidence status.
-- Filter by model, status, latency range, question text.
-- Click to open trace detail page.
+Current list page is functional. Next:
+- Pagination for large trace sets.
+- Date range filter.
+- Latency histogram / aggregate stats.
 
 ### 4. More document formats
 
@@ -184,6 +211,7 @@ Add to the colored diagram:
 - User Portal (`/search`) and admin console (`/chat`) as separate entry points.
 - Table/form-aware chunking layer in the ingestion path.
 - Feedback loop: admin vote → score adjustment → context exclusion → cache eviction.
+- RAGAS offline eval layer.
 
 ### 6. Authentication and tenant isolation
 
@@ -191,12 +219,6 @@ Defer until local v1 is stable:
 - OIDC login
 - Tenant memberships, roles, document ACLs
 - Enforced Qdrant payload filters per tenant
-
-### 7. Optional offline RAGAS adapter
-
-- Not request-time.
-- Store evaluator model, prompt, metric version, raw rationale.
-- Treat LLM-judged scores as directional, not ground truth.
 
 ## Validation Commands
 
@@ -224,8 +246,11 @@ Live golden:
 - Cache key must include tenant_id + generation model + pipeline version.
   Do not extend to multi-tenant without expanding the key scope.
 - `max_length=512` in MiniLM reranker — 256 broke the no_evidence golden case.
-- `gemma2:2b` LLM router disabled by default locally.
+- `gemma4:e4b` LLM router disabled by default locally.
 - Feedback exclusion threshold matches `FEEDBACK_ADJUSTMENT_CAP = 4.0`.
 - `scripts/run_golden_queries.py` calls `/api/retrieval/search`, not the SSE endpoint.
+- `gemma4:e4b` requires `--timeout-seconds 300` on first golden run (model warmup ~115s).
+- Only two models are registered: `gemma2:2b` (default fast) and `gemma4:e4b` (quality). Do not add others without benchmarking.
+- RAGAS `answer_relevancy` is unreliable with local models — treat as N/A; use `faithfulness` and `context_precision` only.
 - Commit only after user confirms the slice looks good.
 - No Co-Authored-By lines in git commits.

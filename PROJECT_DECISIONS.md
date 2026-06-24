@@ -34,22 +34,46 @@ project can be resumed without relying on chat memory.
 | `nomic-embed-text` | Dense embeddings | Active |
 | `Qdrant/bm25` / local BM25 sparse encoder | Sparse lexical retrieval | Active |
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Reranking | Active, batch=32, threads=4, max_length=512 |
-| `gemma2:2b` | Default local answer generation | Active default for local v1 |
-| `qwen3.5:9b` | Quality-check answer generation | Installed/available; selectable |
+| `gemma2:2b` | Default local answer generation | Active default — fastest response, 7/7 golden |
+| `gemma4:e4b` | Quality answer generation | Active — selectable when faithfulness matters more than speed |
 
 ## Generation Model Decision
 
-Default local answer generation is `gemma2:2b`.
+Default local answer generation is `gemma2:2b` (fast, 7/7 golden). `gemma4:e4b` is available as the quality option.
 
-Warmup-aware measured comparison on the 7-case golden set:
+### Model Evaluation — Full Benchmark (7-case golden suite + RAGAS)
 
-| Model | Pass rate | Avg elapsed | P95 elapsed | Avg answer generation | P95 answer generation | Decision |
-|---|---:|---:|---:|---:|---:|---|
-| `gemma2:2b` | 7/7 | 2102 ms | 2767 ms | 1117 ms | 1766 ms | Local default |
-| `qwen3.5:9b` | 7/7 | 8110 ms | 14912 ms | 6565 ms | 11470 ms | Quality-check option |
+Five models were evaluated. RAGAS scores use `gemma3:4b` as the evaluator judge.
+Timings are post-warmup averages over 5 answered cases.
 
-Quality caveat: Qwen returns more citations for some cases. Gemma passes all
-current deterministic golden checks. Re-evaluate after golden set expands.
+| Model | Golden | Avg gen | Avg total | Faithfulness | Context Precision | Decision |
+|---|---|---:|---:|---:|---:|---|
+| `gemma2:2b` | 7/7 | 1,117 ms | 2,100 ms | 0.67 | — | **Active default** — fastest response |
+| `qwen2.5:1.5b-instruct` | 7/7 | 1,265 ms | 2,475 ms | 0.80 | 0.63 | Removed — weaker faithfulness |
+| `gemma3:4b` | 7/7 | 3,280 ms | 4,500 ms | 0.93 | 0.65 | Removed — superseded by gemma4 |
+| `gemma4:e2b` | 7/7 | 3,256 ms | ~10,000 ms* | **0.93** | 0.74 | Removed — unpredictable total latency |
+| `gemma4:e4b` | 7/7 | 5,577 ms | 7,800 ms | 0.90 | **0.90** | Active quality option |
+
+*gemma4:e2b total time was inflated by model-swap overhead; generation time itself was comparable to gemma3:4b.
+
+### Why gemma4:e4b
+
+- **Highest context precision (0.90)** — generates answers that align tightly with retrieved evidence, leaving irrelevant chunks unused
+- **Strong faithfulness (0.90)** — consistently grounded; 4 of 6 golden cases scored 1.000
+- **128K context window** — ready for plan-filtered multi-document retrieval (pending slice #2)
+- **Multimodal architecture** — future-proofed for image/table extraction improvements
+- Trade-off accepted: ~7.8s avg total vs ~2.1s for gemma2:2b; cache hits drop to ~300ms regardless
+
+### Remaining Models
+
+Only two models are registered in the system:
+
+| Model | Role | Avg total latency |
+|---|---|---|
+| `gemma2:2b` | Default — fast | ~2.1s (fresh), ~300ms (cache) |
+| `gemma4:e4b` | Quality option | ~7.8s (fresh), ~300ms (cache) |
+
+All other models (gemma3:4b, gemma4:e2b, qwen2.5:1.5b-instruct, qwen3.5:9b) have been removed from Ollama and the codebase.
 
 ## Router Decision
 
@@ -259,6 +283,44 @@ Not required in request-time flow. Add only as optional offline evaluation adapt
 Store evaluator model, prompt, metric version, raw rationale. Treat LLM-judged
 scores as directional, not ground truth.
 
+## RAGAS Offline Evaluation Decision
+
+RAGAS is integrated as an offline evaluation tool — not part of the request-time pipeline.
+
+**Metrics stored per trace** (in `rag_evaluations` table):
+
+| Metric | What it measures | Requires ground truth? |
+|---|---|---|
+| `faithfulness` | Are all answer claims supported by retrieved context? | No |
+| `answer_relevancy` | Does the answer address the question? | No |
+| `context_precision` | Are retrieved chunks relevant to the query? | No |
+
+`answer_relevancy` consistently fails with small local models (gemma2:2b, gemma4:e4b) because they cannot reliably follow RAGAS's structured JSON output format for that metric. Faithfulness and context precision are reliable.
+
+**Evaluator model**: `gemma3:4b` (not in Ollama by default — pull when running evals).
+
+**RAGAS findings** from benchmark run:
+
+- Context precision 0.000 on mental_health and emergency cases across all models = cross-plan bleed (TX-NEXUS chunks retrieved for NJ Transit questions). Not a model problem — pending slice #2 (plan filtering) fixes this.
+- Specialist copay faithfulness is consistently the lowest case (0.500–0.833) — same root cause: irrelevant context chunks from a second plan document contaminating the answer.
+
+Run command:
+```bash
+.venv/bin/python scripts/run_ragas_eval.py                         # last 20 unevaluated
+.venv/bin/python scripts/run_ragas_eval.py --trace-id <uuid>       # single trace
+.venv/bin/python scripts/run_ragas_eval.py --model gemma3:4b --rerun  # re-score all
+```
+
+## Admin Trace List Decision
+
+`GET /api/traces` list endpoint added to `backend/app/traces.py`.
+
+Supports query params: `?q=` (text search), `?evidence_status=`, `?cache_event=`, `?limit=`, `?offset=`.
+
+Frontend `/traces` page replaces the old `/traces/demo` link in the sidebar. Shows question, evidence status, cache event, model, latency, and timestamp per trace. Client-side search and filter chips.
+
+Trace detail page (`/traces/{id}`) now includes a RAGAS eval panel showing faithfulness, answer relevancy, and context precision score bars. Shows the run command if no scores exist yet.
+
 ## Completed Slices (summary)
 
 1. Dense + sparse hybrid retrieval with RRF fusion.
@@ -266,7 +328,7 @@ scores as directional, not ground truth.
 3. Full RAG trace persistence and visual trace page.
 4. Deterministic golden evaluation suite (7 cases, 7/7 passing).
 5. Warmup-aware model latency comparison script.
-6. `gemma2:2b` as default generation model.
+6. `gemma2:2b` as initial default generation model.
 7. Ingestion quality observability, document delete, re-chunk UI.
 8. SSE streaming endpoint with real-time stages and token streaming.
 9. Two-tier response cache: exact hash (PostgreSQL) + semantic (Qdrant 0.93).
@@ -281,16 +343,18 @@ scores as directional, not ground truth.
 18. Cache invalidation when chunk receives "wrong" feedback vote.
 19. Table/form-aware chunking: normalize, split, form detection, context prefix, 12 tests.
 20. Streaming render batching via `requestAnimationFrame` in both portal pages.
+21. Admin trace list page (`/traces`) with search, filters, and click-through to detail.
+22. RAGAS offline evaluation: `rag_evaluations` table, `run_ragas_eval.py` script, eval panel in trace detail.
+23. Multi-model benchmark (5 models, golden + RAGAS); `gemma2:2b` kept as default (fast), `gemma4:e4b` added as quality option; all other models removed.
 
 ## Pending Slices (priority order)
 
-1. **Conversation support** — multi-turn with provenance-safe summaries.
-2. **Document routing / plan filtering** — prevent answer bleed between multiple plan docs.
-3. **Admin trace list/search page** — browse and filter past queries with traces.
+1. **Document routing / plan filtering** — prevent answer bleed between multiple plan docs (confirmed root cause of low context precision by RAGAS).
+2. **Conversation support** — multi-turn with provenance-safe summaries.
+3. **Admin trace list enhancements** — pagination, date range filter, latency histogram.
 4. **More document formats** — DOCX, XLSX, CSV, HTML, PPTX, OCR fallback.
-5. **FigJam architecture diagram update** — user portal, feedback loop, table chunking.
+5. **FigJam architecture diagram update** — user portal, feedback loop, table chunking, RAGAS eval layer.
 6. **Authentication and tenant isolation** — OIDC, roles, ACLs, Qdrant filters.
-7. **Optional offline RAGAS adapter**.
 
 ## Open Questions
 

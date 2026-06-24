@@ -1,7 +1,17 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -336,6 +346,33 @@ class RagTraceStep(Base):
     )
 
     trace: Mapped[RagTrace] = relationship(back_populates="steps")
+
+
+class RagEvaluation(Base):
+    __tablename__ = "rag_evaluations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    trace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("rag_traces.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    evaluator_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    ragas_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    faithfulness: Mapped[float | None] = mapped_column(Float)
+    answer_relevancy: Mapped[float | None] = mapped_column(Float)
+    context_precision: Mapped[float | None] = mapped_column(Float)
+    scores_raw: Mapped[dict | None] = mapped_column(JSON)
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
 
 
 class ResponseCache(Base):

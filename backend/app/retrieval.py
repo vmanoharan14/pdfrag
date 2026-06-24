@@ -55,7 +55,7 @@ RETRIEVAL_PIPELINE_VERSION = "local-text-rag-v1"
 
 class RetrievalRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
-    generation_model: Literal["qwen3.5:9b", "gemma2:2b"] | None = None
+    generation_model: Literal["gemma2:2b", "gemma4:e4b"] | None = None
 
 
 class RetrievalStage(BaseModel):
